@@ -3,6 +3,7 @@ venv/
 .venv/
 env/
 pyvenv.cfg
+bin/
 
 # Build & Distribution
 build/
