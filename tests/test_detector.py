@@ -53,7 +53,7 @@ class TestDanglingCNAME:
             dangling_cname=True,
             cname_chain=[
                 {"from": "sub.example.com", "to": "old.github.io"},
-                {"from": "old.github.io",   "to": "__NXDOMAIN__ (target tidak ada!)", "dangling": True},
+                {"from": "old.github.io",   "to": "__NXDOMAIN__ (target does not resolve!)", "dangling": True},
             ],
         )
 
@@ -70,7 +70,7 @@ class TestDanglingCNAME:
             dangling_cname=True,
             cname_chain=[
                 {"from": "sub.example.com", "to": "user.github.io"},
-                {"from": "user.github.io",  "to": "__NXDOMAIN__ (target tidak ada!)", "dangling": True},
+                {"from": "user.github.io",  "to": "__NXDOMAIN__ (target does not resolve!)", "dangling": True},
             ],
         )
 
@@ -88,7 +88,7 @@ class TestDanglingCNAME:
             dangling_cname=True,
             cname_chain=[
                 # Only the dangling hop, no valid first hop
-                {"from": "sub.example.com", "to": "__NXDOMAIN__ (target tidak ada!)", "dangling": True},
+                {"from": "sub.example.com", "to": "__NXDOMAIN__ (target does not resolve!)", "dangling": True},
             ],
         )
 

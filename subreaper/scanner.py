@@ -106,7 +106,7 @@ class SubReaper:
                 result.status = "VULNERABLE"
                 self.reporter.print_status(
                     domain, "VULN",
-                    f"{Fore.RED}({len(vulns)} vuln ditemukan!){Style.RESET_ALL}",
+                    f"{Fore.RED}({len(vulns)} vulnerability found!){Style.RESET_ALL}",
                 )
                 self.reporter.print_vuln(result)
 
@@ -115,14 +115,14 @@ class SubReaper:
                 if self.verbose:
                     self.reporter.print_status(
                         domain, "ERROR",
-                        f"{Fore.YELLOW}NXDOMAIN — domain tidak exist{Style.RESET_ALL}",
+                        f"{Fore.YELLOW}NXDOMAIN — domain not exist{Style.RESET_ALL}",
                     )
             else:
                 result.status = "CLEAN"
                 if self.verbose:
                     self.reporter.print_status(
                         domain, "CLEAN",
-                        f"{Fore.GREEN}Aman ({elapsed:.0f}ms){Style.RESET_ALL}",
+                        f"{Fore.GREEN}Secure ({elapsed:.0f}ms){Style.RESET_ALL}",
                     )
 
             self.results.append(result)

@@ -104,7 +104,7 @@ class DNSAnalyzer:
                 # Target of a valid CNAME doesn't exist → dangling!
                 chain.append({
                     "from": current,
-                    "to": "__NXDOMAIN__ (target tidak ada!)",
+                    "to": "__NXDOMAIN__ (target does not resolve!)",
                     "dangling": True,
                 })
                 break

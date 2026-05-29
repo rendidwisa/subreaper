@@ -31,7 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
         epilog="""
 examples:
   subreaper -d sub.example.com
-  subreaper -f subdomains.txt -o hasil.json -v
+  subreaper -f subdomains.txt -o results.json -v
   subreaper -f subs.txt -c 50 -t 15
   subfinder -d target.com -silent | subreaper -f /dev/stdin
         """,
@@ -95,7 +95,7 @@ def _load_domains(args: argparse.Namespace) -> list[str]:
                 domains.extend(line.strip() for line in fh if line.strip())
         except FileNotFoundError:
             print(
-                f"  {Fore.RED}Error: file tidak ditemukan — {args.file}{Style.RESET_ALL}"
+                f"  {Fore.RED}Error: file not found — {args.file}{Style.RESET_ALL}"
             )
             sys.exit(1)
 
@@ -111,7 +111,7 @@ def _print_header(domains: list[str], args: argparse.Namespace) -> None:
     print(f"  {Fore.CYAN}Timeout    : {Fore.WHITE}{args.timeout}s{Style.RESET_ALL}")
     print(f"  {Fore.CYAN}Nameservers: {Fore.WHITE}{ns_display}{Style.RESET_ALL}")
     print(
-        f"  {Fore.CYAN}Dimulai    : "
+        f"  {Fore.CYAN}Started at  : "
         f"{Fore.WHITE}{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{Style.RESET_ALL}"
     )
     print(f"  {'━' * 60}\n")
@@ -130,13 +130,13 @@ async def async_main() -> None:
     if not args.domain and not args.file:
         parser.print_help()
         print(
-            f"\n  {Fore.RED}Error: harus ada -d <domain> atau -f <file>{Style.RESET_ALL}"
+            f"\n  {Fore.RED}Error: must specify either -d <domain> or -f <file>{Style.RESET_ALL}"
         )
         sys.exit(1)
 
     domains = _load_domains(args)
     if not domains:
-        print(f"  {Fore.YELLOW}Tidak ada domain untuk di-scan.{Style.RESET_ALL}")
+        print(f"  {Fore.YELLOW}No domains to scan.{Style.RESET_ALL}")
         sys.exit(0)
 
     nameservers = None
@@ -157,7 +157,7 @@ async def async_main() -> None:
     elapsed_total = time.time() - start_total
 
     scanner.print_summary()
-    print(f"  {Fore.CYAN}Total waktu: {elapsed_total:.2f} detik{Style.RESET_ALL}\n")
+    print(f"  {Fore.CYAN}Elapsed time: {elapsed_total:.2f} seconds{Style.RESET_ALL}\n")
 
     if args.output:
         scanner.export_json(args.output)
@@ -172,5 +172,5 @@ def main() -> None:
     try:
         asyncio.run(async_main())
     except KeyboardInterrupt:
-        print(f"\n\n  {Fore.YELLOW}Scan dihentikan.{Style.RESET_ALL}\n")
+        print(f"\n\n  {Fore.YELLOW}Scan interrupted.{Style.RESET_ALL}\n")
         sys.exit(0)

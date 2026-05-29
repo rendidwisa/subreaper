@@ -79,19 +79,19 @@ class VulnDetector:
                     service="Unknown",
                     confidence="HIGH",
                     details=(
-                        "CNAME chain valid ditemukan, tapi target akhir tidak exist di DNS. "
+                        "Valid CNAME chain detected, but the final target does not exist. "
                         f"Target: {dangling_hop.get('to')}"
                     ),
                     cname_chain=[
                         f"{h['from']} → {h['to']}" for h in dns_info.cname_chain
                     ],
                     evidence=[
-                        f"Hop terakhir: {dangling_hop.get('from')} → NXDOMAIN",
-                        "Target domain tidak terdaftar, bisa di-claim/register",
+                        f"Last hop: {dangling_hop.get('from')} → NXDOMAIN",
+                        "Target domain is not registered, can be claimed/register",
                     ],
                     recommendation=(
-                        "Hapus CNAME record ini dari DNS, atau daftarkan domain target tersebut. "
-                        "Attacker bisa mendaftarkan domain target dan hosting konten berbahaya."
+                        "Remove this CNAME record from your DNS settings, or register the target domain. "
+                        "An attacker could claim the target domain to host malicious content."
                     ),
                 )
 
@@ -138,8 +138,7 @@ class VulnDetector:
                         service=fp_data["service"],
                         confidence=fp_data["confidence"],
                         details=(
-                            f"CNAME ke {fp_data['service']} mengarah ke resource "
-                            "yang belum diklaim"
+                            f"CNAME to {fp_data['service']} points to an unclaimed resource"
                         ),
                         cname_chain=[
                             f"{h['from']} → {h['to']}" for h in dns_info.cname_chain
@@ -150,8 +149,8 @@ class VulnDetector:
                         ],
                         http_status=status,
                         recommendation=(
-                            f"Klaim resource {fp_data['service']} yang ditunjuk CNAME, "
-                            f"atau hapus DNS record ini. Ref: {fp_data['references']}"
+                            f"Claim the {fp_data['service']} resource pointed to by the CNAME, "
+                            f"or remove this DNS record. Ref: {fp_data['references']}"
                         ),
                     )
                     vulns.append(vuln)
@@ -167,10 +166,10 @@ class VulnDetector:
                         service="DNS Nameserver",
                         confidence="HIGH",
                         details=(
-                            f"NS record mengarah ke nameserver yang tidak resolve: {ns}"
+                            f"NS record points to a nameserver that does not resolve: {ns}"
                         ),
-                        evidence=[f"NS: {ns} → tidak resolve"],
-                        recommendation="Klaim atau ganti NS record",
+                        evidence=[f"NS: {ns} → does not resolve"],
+                        recommendation="Claim or replace the NS record",
                     )
                     vulns.append(vuln)
 

@@ -30,7 +30,7 @@ BANNER = f"""
   ╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝     ╚══════╝╚═╝  ╚═╝
 {Style.RESET_ALL}
 {Fore.YELLOW}  [ Subdomain Takeover & DNS Vulnerability Scanner — v1.1 ]{Style.RESET_ALL}
-{Fore.CYAN}  [ Pentest & Bug Bounty Edition — Zero False Positive Design ]{Style.RESET_ALL}
+{Fore.CYAN}  [ Pentest & Bug Bounty — By @rendidwisa ]{Style.RESET_ALL}
   {Fore.WHITE}{'━' * 72}{Style.RESET_ALL}
 """
 
@@ -110,9 +110,9 @@ class Reporter:
         nxd    = [r for r in results if r.status == "NXDOMAIN"]
 
         print(f"\n  {_SEP}")
-        print(f"  {Style.BRIGHT}{Fore.WHITE}RINGKASAN SCAN{Style.RESET_ALL}")
+        print(f"  {Style.BRIGHT}{Fore.WHITE}SCAN SUMMARY{Style.RESET_ALL}")
         print(f"  {_SEP}")
-        print(f"  Total domain   : {Fore.CYAN}{total}{Style.RESET_ALL}")
+        print(f"  Total domains  : {Fore.CYAN}{total}{Style.RESET_ALL}")
         print(f"  Vulnerable     : {Fore.RED}{len(vulns)}{Style.RESET_ALL}")
         print(f"  Clean          : {Fore.GREEN}{len(clean)}{Style.RESET_ALL}")
         print(f"  NXDOMAIN       : {Fore.YELLOW}{len(nxd)}{Style.RESET_ALL}")
@@ -172,5 +172,5 @@ class Reporter:
             json.dump(data, fh, indent=2)
 
         print(
-            f"  {Fore.GREEN}✓ Hasil disimpan ke: {output_path}{Style.RESET_ALL}"
+            f"  {Fore.GREEN}✓ Results saved to: {output_path}{Style.RESET_ALL}"
         )
