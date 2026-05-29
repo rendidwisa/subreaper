@@ -4,6 +4,9 @@ venv/
 env/
 pyvenv.cfg
 bin/
+include/
+lib/
+lib64/
 
 # Build & Distribution
 build/
