@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "subreaper"
+version = "1.1.0"
+description = "Subdomain Takeover & DNS Vulnerability Scanner"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "you@example.com"}
+]
+requires-python = ">=3.9"
+dependencies = [
+    "aiohttp>=3.8",
+    "dnspython>=2.3",
+    "colorama>=0.4",
+]
+keywords = ["subdomain-takeover", "security", "bugbounty", "pentest", "dns"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Topic :: Security",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+[project.scripts]
+subreaper = "subreaper.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["subreaper", "subreaper.*"]
