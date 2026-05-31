@@ -9,33 +9,65 @@ import asyncio
 import time
 from datetime import datetime
 
-from colorama import Fore, Style
-
 from subreaper.core.dns_analyzer import DNSAnalyzer
 from subreaper.core.http_prober import HTTPProber
 from subreaper.core.vuln_detector import VulnDetector
 from subreaper.models import ScanResult
 from subreaper.reporter import Reporter
 
+from rich.console import Console
+from rich.live import Live
+from rich.table import Table
+from rich.text import Text
+from rich import box
+
+console = Console()
+
+_STATUS_STYLE = {
+    "VULNERABLE": ("[VULN]",     "bold red"),
+    "NXDOMAIN":   ("[NXDOMAIN]", "yellow"),
+    "CLEAN":      ("[CLEAN]",    "green"),
+    "SCANNING":   ("[...]",      "dim cyan"),
+}
+
+
+def _build_table(rows: list[dict], total: int) -> Table:
+    done = sum(1 for r in rows if r["status"] != "SCANNING")
+    vuln = sum(1 for r in rows if r["status"] == "VULNERABLE")
+
+    title = Text()
+    title.append("SubReaper", style="bold red")
+    title.append(f"  {done}/{total}", style="dim white")
+    title.append("  ·  ", style="dim")
+    title.append(f"{vuln} vuln", style="bold red" if vuln else "dim white")
+
+    tbl = Table(
+        title=title,
+        box=box.SIMPLE_HEAD,
+        show_header=True,
+        header_style="bold white",
+        expand=False,
+        min_width=72,
+    )
+    tbl.add_column("Domain",  style="cyan", no_wrap=True, min_width=34)
+    tbl.add_column("Status",  justify="center",            min_width=12)
+    tbl.add_column("Detail",  style="dim white",           min_width=22)
+    tbl.add_column("ms",      justify="right",             min_width=6)
+
+    for r in rows:
+        label, style = _STATUS_STYLE.get(r["status"], ("[?]", "white"))
+        ms_cell = Text("…", style="dim") if r["status"] == "SCANNING" else str(r.get("ms", ""))
+        tbl.add_row(
+            r["domain"],
+            Text(label, style=style),
+            r.get("detail", ""),
+            ms_cell,
+        )
+
+    return tbl
+
 
 class SubReaper:
-    """
-    Main scanner engine.
-
-    Parameters
-    ----------
-    concurrency : int
-        Maximum number of domains scanned in parallel.
-    timeout : int
-        DNS and HTTP timeout in seconds.
-    nameservers : list[str] | None
-        Custom DNS resolvers. Defaults to 8.8.8.8 / 1.1.1.1 / 9.9.9.9.
-    verbose : bool
-        When True, print a status line for every domain, including clean ones.
-    reporter : Reporter | None
-        Custom reporter instance. Defaults to the built-in Reporter.
-    """
-
     def __init__(
         self,
         concurrency: int = 20,
@@ -55,20 +87,25 @@ class SubReaper:
         self._semaphore: asyncio.Semaphore | None = None
         self.results: list[ScanResult] = []
 
-    # ── single-domain scan ───────────────────────────────────────────────────
+        self._live:  Live | None  = None
+        self._rows:  list[dict]   = []
+        self._total: int          = 0
+
+    def _refresh(self) -> None:
+        if self._live:
+            self._live.update(_build_table(self._rows, self._total))
+
+    def _row_index(self, domain: str) -> int:
+        for i, r in enumerate(self._rows):
+            if r["domain"] == domain:
+                return i
+        return -1
 
     async def scan_domain(self, domain: str) -> ScanResult | None:
-        """
-        Scan a single *domain*.
-
-        Returns a ScanResult, or None if *domain* is blank.
-        Thread-safe up to *concurrency* simultaneous calls.
-        """
         domain = domain.strip().lower()
         if not domain:
             return None
 
-        # Lazily create semaphore on first call (must be inside a running loop)
         if self._semaphore is None:
             self._semaphore = asyncio.Semaphore(self.concurrency)
 
@@ -76,77 +113,83 @@ class SubReaper:
             start  = time.time()
             result = ScanResult(domain=domain, timestamp=datetime.now().isoformat())
 
-            if self.verbose:
-                self.reporter.print_status(domain, "SCAN")
+            idx = self._row_index(domain)
+            if idx == -1:
+                self._rows.append({"domain": domain, "status": "SCANNING", "detail": "", "ms": ""})
+                idx = len(self._rows) - 1
+            self._refresh()
 
-            # DNS analysis runs in a thread-pool executor to avoid blocking the
-            # event loop with synchronous dnspython calls.
             dns_info = await asyncio.get_event_loop().run_in_executor(
                 None, self.dns.analyze, domain
             )
             result.dns = dns_info
 
-            if self.verbose and dns_info.cname_chain:
-                chain_str = " → ".join(
-                    [dns_info.cname_chain[0]["from"]]
-                    + [h["to"] for h in dns_info.cname_chain]
-                )
-                self.reporter.print_status(domain, "DNS", f"CNAME: {chain_str}")
-
-            # Vulnerability checks
             vulns = await self.detector.check_takeover(domain, dns_info)
             result.vulnerabilities = vulns
 
-            # Timing
-            elapsed            = (time.time() - start) * 1000
+            elapsed             = (time.time() - start) * 1000
             result.scan_time_ms = round(elapsed, 2)
 
-            # Status + output
             if vulns:
                 result.status = "VULNERABLE"
-                self.reporter.print_status(
-                    domain, "VULN",
-                    f"{Fore.RED}({len(vulns)} vulnerability found!){Style.RESET_ALL}",
-                )
-                self.reporter.print_vuln(result)
+                svc    = vulns[0].service if vulns else ""
+                detail = f"{len(vulns)} issue · {svc}" if svc else f"{len(vulns)} issue"
+                self._rows[idx] = {"domain": domain, "status": "VULNERABLE", "detail": detail, "ms": f"{elapsed:.0f}"}
 
             elif dns_info.nxdomain:
                 result.status = "NXDOMAIN"
-                if self.verbose:
-                    self.reporter.print_status(
-                        domain, "ERROR",
-                        f"{Fore.YELLOW}NXDOMAIN — domain not exist{Style.RESET_ALL}",
-                    )
+                self._rows[idx] = {"domain": domain, "status": "NXDOMAIN", "detail": "no record", "ms": f"{elapsed:.0f}"}
+
             else:
                 result.status = "CLEAN"
-                if self.verbose:
-                    self.reporter.print_status(
-                        domain, "CLEAN",
-                        f"{Fore.GREEN}Secure ({elapsed:.0f}ms){Style.RESET_ALL}",
-                    )
+                hint = ""
+                if dns_info.cname_chain:
+                    hint = f"→ {dns_info.cname_chain[-1]['to'][:26]}"
+                self._rows[idx] = {"domain": domain, "status": "CLEAN", "detail": hint, "ms": f"{elapsed:.0f}"}
+
+            self._refresh()
+
+            if not self._live:
+                if vulns:
+                    self.reporter.print_vuln(result)
+                elif self.verbose or result.status in ("NXDOMAIN", "VULNERABLE"):
+                    if result.status == "CLEAN":
+                        self.reporter.print_clean(result, verbose=self.verbose)
+                    else:
+                        self.reporter.print_status(domain, result.status)
 
             self.results.append(result)
             return result
 
-    # ── bulk scan ────────────────────────────────────────────────────────────
-
     async def scan_all(self, domains: list[str]) -> list[ScanResult]:
-        """
-        Scan all *domains* concurrently.
+        clean        = [d for d in domains if d.strip()]
+        self._total  = len(clean)
+        self._rows   = [{"domain": d.strip().lower(), "status": "SCANNING", "detail": "", "ms": ""} for d in clean]
 
-        Silently drops blank lines and swallows per-domain exceptions so one
-        bad domain never aborts the entire batch.
-        """
-        tasks   = [self.scan_domain(d) for d in domains if d.strip()]
-        raw     = await asyncio.gather(*tasks, return_exceptions=True)
+        if console.is_terminal:
+            with Live(
+                _build_table(self._rows, self._total),
+                console=console,
+                refresh_per_second=12,
+                transient=True,
+            ) as live:
+                self._live = live
+                raw = await asyncio.gather(
+                    *[self.scan_domain(d) for d in clean],
+                    return_exceptions=True,
+                )
+                self._live = None
+            console.print(_build_table(self._rows, self._total))
+        else:
+            raw = await asyncio.gather(
+                *[self.scan_domain(d) for d in clean],
+                return_exceptions=True,
+            )
+
         return [r for r in raw if r and not isinstance(r, Exception)]
 
-    # ── convenience wrappers ─────────────────────────────────────────────────
-
-    def print_summary(self) -> None:
-        """Print scan summary using the configured reporter."""
-        self.reporter.print_summary(self.results)
+    def print_summary(self, elapsed: float = 0.0) -> None:
+        self.reporter.print_summary(self.results, elapsed)
 
     def export_json(self, output_path: str) -> None:
-        """Export results to *output_path* as JSON."""
         self.reporter.export_json(self.results, output_path)

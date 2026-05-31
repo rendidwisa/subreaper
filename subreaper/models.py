@@ -1,17 +1,9 @@
-"""
-Data models used across SubReaper.
-
-All dataclasses are defined here to avoid circular imports between modules.
-"""
-
 from dataclasses import dataclass, field
 from typing import Optional
 
 
 @dataclass
 class DNSInfo:
-    """Result of a full DNS analysis for a single domain."""
-
     a_records: list = field(default_factory=list)
     aaaa_records: list = field(default_factory=list)
     cname_chain: list = field(default_factory=list)
@@ -25,26 +17,29 @@ class DNSInfo:
 
 @dataclass
 class VulnResult:
-    """A single confirmed vulnerability finding."""
-
     domain: str
-    vuln_type: str          # SUBDOMAIN_TAKEOVER | DANGLING_CNAME | NS_TAKEOVER
+    vuln_type: str
     service: str
-    confidence: str         # HIGH | MEDIUM
+    confidence: str
     details: str
     cname_chain: list = field(default_factory=list)
     evidence: list = field(default_factory=list)
     http_status: Optional[int] = None
     recommendation: str = ""
 
+    risk_score: int = 0
+    exploitability: str = "NONE"
+    verification_stage: str = "DNS"
+    provider: str = ""
+    is_claimable: bool = False
+    evidence_level: str = "WEAK"
+
 
 @dataclass
 class ScanResult:
-    """Aggregated result for one scanned domain."""
-
     domain: str
     timestamp: str
     dns: Optional[DNSInfo] = None
     vulnerabilities: list = field(default_factory=list)
-    status: str = "CLEAN"   # CLEAN | VULNERABLE | NXDOMAIN
+    status: str = "CLEAN"
     scan_time_ms: float = 0.0

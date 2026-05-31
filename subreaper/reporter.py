@@ -1,142 +1,283 @@
 """
-Reporter module.
+Reporter — terminal output and file export for SubReaper.
 
-All terminal output (colors, banners, per-domain status, vulnerability
-details, scan summary) and file export (JSON) live here.
-
-Keeping display logic separate from scan logic means:
-  - Easy to add new output formats (Slack, CSV, HTML) without touching core.
-  - Core modules stay importable without colorama side-effects.
+Display logic is fully separated from scan logic:
+  - Core modules stay importable without rich side-effects.
+  - Adding new output formats (CSV, Slack, HTML) only touches this file.
 """
 
-import json
+from __future__ import annotations
 
-from colorama import Back, Fore, Style
+import json
+import re
+from datetime import datetime
+from typing import Optional
+
+from rich.console import Console
+from rich.live import Live
+from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn
+from rich.rule import Rule
+from rich.table import Table
+from rich.text import Text
+from rich import box
 
 from subreaper.models import ScanResult, VulnResult
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ASCII BANNER
-# ─────────────────────────────────────────────────────────────────────────────
+console = Console()
 
-BANNER = f"""
-{Fore.RED}{Style.BRIGHT}
+BANNER = """\
+[red bold]
   ███████╗██╗   ██╗██████╗ ██████╗ ███████╗ █████╗ ██████╗ ███████╗██████╗
   ██╔════╝██║   ██║██╔══██╗██╔══██╗██╔════╝██╔══██╗██╔══██╗██╔════╝██╔══██╗
   ███████╗██║   ██║██████╔╝██████╔╝█████╗  ███████║██████╔╝█████╗  ██████╔╝
   ╚════██║██║   ██║██╔══██╗██╔══██╗██╔══╝  ██╔══██║██╔═══╝ ██╔══╝  ██╔══██╗
   ███████║╚██████╔╝██████╔╝██║  ██║███████╗██║  ██║██║     ███████╗██║  ██║
   ╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝     ╚══════╝╚═╝  ╚═╝
-{Style.RESET_ALL}
-{Fore.YELLOW}  [ Subdomain Takeover & DNS Vulnerability Scanner — v1.1 ]{Style.RESET_ALL}
-{Fore.CYAN}  [ Pentest & Bug Bounty — By @rendidwisa ]{Style.RESET_ALL}
-  {Fore.WHITE}{'━' * 72}{Style.RESET_ALL}
+[/red bold]
+[yellow]  [ Subdomain Takeover & DNS Vulnerability Scanner — v1.2 ][/yellow]
+[cyan]  [ Pentest & Bug Bounty — By @rendidwisa ][/cyan]
 """
 
-_SEP = "━" * 60
 
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _parse_score(details: str) -> Optional[int]:
+    """Extract numeric score from 'Score: X/100' in details string."""
+    m = re.search(r"Score:\s*(\d+)/100", details or "")
+    return int(m.group(1)) if m else None
+
+
+def _conf_style(confidence: str) -> str:
+    return "red bold" if confidence == "HIGH" else "yellow bold"
+
+
+def _status_text(status: str) -> Text:
+    mapping = {
+        "VULNERABLE": Text("!! VULN", style="bold red"),
+        "CLEAN":      Text("CLEAN",   style="bold green"),
+        "NXDOMAIN":   Text("NXDOMAIN",style="bold yellow"),
+        "ERROR":      Text("ERROR",   style="bold yellow"),
+    }
+    return mapping.get(status, Text(status, style="dim"))
+
+
+# ── Reporter ──────────────────────────────────────────────────────────────────
 
 class Reporter:
     """
-    Handles all terminal output and file export for SubReaper.
+    All terminal output and file export for SubReaper.
 
-    Can be subclassed or replaced to support alternative output backends
-    (e.g. JSON-lines to stdout, Slack webhooks, HTML reports).
+    Subclass or replace to support alternative backends.
     """
 
-    # ── status line ──────────────────────────────────────────────────────────
+    # ── banner + session header ───────────────────────────────────────────────
 
     @staticmethod
-    def print_status(domain: str, status: str, extras: str = "") -> None:
-        """Print a single-line status entry for *domain*."""
-        from datetime import datetime
-        ts = datetime.now().strftime("%H:%M:%S")
+    def print_banner() -> None:
+        console.print(BANNER)
 
-        icons = {
-            "VULN":  f"{Back.RED}{Fore.WHITE} !! VULN {Style.RESET_ALL}",
-            "SCAN":  f"{Fore.CYAN}[SCAN]{Style.RESET_ALL}",
-            "CLEAN": f"{Fore.GREEN}[CLEAN]{Style.RESET_ALL}",
-            "ERROR": f"{Fore.YELLOW}[ERROR]{Style.RESET_ALL}",
-            "DNS":   f"{Fore.BLUE}[DNS] {Style.RESET_ALL}",
-        }
-        icon = icons.get(status, f"[{status}]")
-        print(
-            f"  {Fore.WHITE}{ts}{Style.RESET_ALL} {icon} "
-            f"{Fore.WHITE}{domain}{Style.RESET_ALL} {extras}"
+    @staticmethod
+    def print_session_info(
+        total: int,
+        concurrency: int,
+        timeout: int,
+        nameservers: list[str],
+    ) -> None:
+        t = Table(box=None, show_header=False, padding=(0, 1))
+        t.add_column(style="cyan",  no_wrap=True, min_width=18)
+        t.add_column(style="white", no_wrap=True)
+
+        ns_str = ", ".join(nameservers) if nameservers else "8.8.8.8, 1.1.1.1, 9.9.9.9 (default)"
+        started = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        t.add_row("Target",       f"{total} domains")
+        t.add_row("Concurrency",  str(concurrency))
+        t.add_row("Timeout",      f"{timeout}s")
+        t.add_row("Nameservers",  ns_str)
+        t.add_row("Started at",   started)
+
+        console.print(t)
+        console.print()
+
+    # ── progress bar (use as context manager around the scan loop) ────────────
+
+    @staticmethod
+    def make_progress() -> Progress:
+        """
+        Returns a rich Progress instance.
+
+        Usage:
+            with Reporter.make_progress() as prog:
+                task = prog.add_task("", total=total_domains)
+                for domain in domains:
+                    result = await scan(domain)
+                    prog.advance(task)
+                    Reporter.print_result_line(result, prog)
+        """
+        return Progress(
+            SpinnerColumn(spinner_name="dots"),
+            TextColumn("[bold cyan]SubReaper[/bold cyan]"),
+            BarColumn(bar_width=36, complete_style="green", finished_style="green bold"),
+            TaskProgressColumn(),
+            TextColumn("[dim]·[/dim]"),
+            TextColumn("{task.fields[vuln_count]} vuln", style="red"),
+            console=console,
+            transient=False,
         )
 
-    # ── vulnerability detail block ───────────────────────────────────────────
+    # ── per-domain result line ────────────────────────────────────────────────
+
+    @staticmethod
+    def print_result_line(result: ScanResult) -> None:
+        """Single result line — printed after each domain completes."""
+        ts     = datetime.now().strftime("%H:%M:%S")
+        status = _status_text(result.status)
+
+        line = Text()
+        line.append(f"  {ts} ", style="dim")
+        line.append("[")
+        line.append_text(status)
+        line.append("] ")
+        line.append(result.domain, style="white")
+
+        if result.status == "VULNERABLE" and result.vulnerabilities:
+            v = result.vulnerabilities[0]
+            score = _parse_score(v.details)
+            score_str = f" · score {score}/100" if score else ""
+            line.append(
+                f"  {v.service} · {v.confidence}{score_str}",
+                style="red",
+            )
+        elif result.status == "NXDOMAIN":
+            line.append("  domain not found", style="dim")
+
+        console.print(line)
+
+        # Immediately print vuln detail block below the line
+        if result.status == "VULNERABLE":
+            Reporter.print_vuln(result)
+
+    # ── vulnerability detail block ────────────────────────────────────────────
 
     @staticmethod
     def print_vuln(result: ScanResult) -> None:
-        """Print a detailed block for every vulnerability in *result*."""
         for vuln in result.vulnerabilities:
-            conf_color = Fore.RED if vuln.confidence == "HIGH" else Fore.YELLOW
-            print(f"\n  {_SEP}")
-            print(f"  {Back.RED}{Fore.WHITE} VULNERABILITY FOUND {Style.RESET_ALL}")
-            print(f"  {Fore.WHITE}Domain    : {Fore.CYAN}{vuln.domain}{Style.RESET_ALL}")
-            print(f"  {Fore.WHITE}Type      : {Fore.RED}{vuln.vuln_type}{Style.RESET_ALL}")
-            print(f"  {Fore.WHITE}Service   : {Fore.MAGENTA}{vuln.service}{Style.RESET_ALL}")
-            print(f"  {Fore.WHITE}Confidence: {conf_color}{vuln.confidence}{Style.RESET_ALL}")
-            print(f"  {Fore.WHITE}Details   : {vuln.details}{Style.RESET_ALL}")
+            score     = _parse_score(vuln.details)
+            score_str = f" · {score}/100" if score else ""
+            c_style   = _conf_style(vuln.confidence)
+
+            console.print()
+            console.print(Rule(
+                title="[on red][white] ⚠ VULNERABILITY FOUND [/white][/on red]",
+                style="red dim",
+            ))
+
+            t = Table(box=None, show_header=False, padding=(0, 1), min_width=60)
+            t.add_column(style="dim",   no_wrap=True, min_width=12)
+            t.add_column(style="white", overflow="fold")
+
+            t.add_row("Domain",     Text(vuln.domain,    style="cyan"))
+            t.add_row("Type",       Text(vuln.vuln_type, style="red bold"))
+            t.add_row("Service",    Text(vuln.service,   style="magenta"))
+            t.add_row(
+                "Confidence",
+                Text(f"{vuln.confidence}{score_str}", style=c_style),
+            )
+            t.add_row("Details",    vuln.details or "—")
 
             if vuln.cname_chain:
-                print(f"  {Fore.WHITE}CNAME Chain:{Style.RESET_ALL}")
+                chain_text = Text()
                 for hop in vuln.cname_chain:
-                    print(f"    {Fore.YELLOW}→ {hop}{Style.RESET_ALL}")
+                    chain_text.append(f"  → {hop}\n", style="yellow")
+                t.add_row("CNAME Chain", chain_text)
 
             if vuln.evidence:
-                print(f"  {Fore.WHITE}Evidence:{Style.RESET_ALL}")
+                ev_text = Text()
                 for ev in vuln.evidence:
-                    print(f"    {Fore.RED}• {ev}{Style.RESET_ALL}")
+                    ev_text.append(f"  • {ev}\n", style="red dim")
+                t.add_row("Evidence", ev_text)
 
             if vuln.http_status:
-                print(
-                    f"  {Fore.WHITE}HTTP Status: {Fore.RED}{vuln.http_status}{Style.RESET_ALL}"
-                )
+                t.add_row("HTTP Status", Text(str(vuln.http_status), style="red"))
 
-            print(f"  {Fore.WHITE}Fix       : {Fore.GREEN}{vuln.recommendation}{Style.RESET_ALL}")
-            print(f"  {_SEP}\n")
+            t.add_row("Fix", Text(vuln.recommendation, style="green"))
 
-    # ── scan summary ─────────────────────────────────────────────────────────
+            console.print(t)
+            console.print(Rule(style="red dim"))
+            console.print()
+
+    # ── scan summary ──────────────────────────────────────────────────────────
 
     @staticmethod
-    def print_summary(results: list[ScanResult]) -> None:
-        """Print aggregate statistics after a full scan run."""
-        total = len(results)
-        vulns  = [r for r in results if r.status == "VULNERABLE"]
-        clean  = [r for r in results if r.status == "CLEAN"]
-        nxd    = [r for r in results if r.status == "NXDOMAIN"]
+    def print_summary(results: list[ScanResult], elapsed: float) -> None:
+        vulns = [r for r in results if r.status == "VULNERABLE"]
+        clean = [r for r in results if r.status == "CLEAN"]
+        nxd   = [r for r in results if r.status == "NXDOMAIN"]
 
-        print(f"\n  {_SEP}")
-        print(f"  {Style.BRIGHT}{Fore.WHITE}SCAN SUMMARY{Style.RESET_ALL}")
-        print(f"  {_SEP}")
-        print(f"  Total domains  : {Fore.CYAN}{total}{Style.RESET_ALL}")
-        print(f"  Vulnerable     : {Fore.RED}{len(vulns)}{Style.RESET_ALL}")
-        print(f"  Clean          : {Fore.GREEN}{len(clean)}{Style.RESET_ALL}")
-        print(f"  NXDOMAIN       : {Fore.YELLOW}{len(nxd)}{Style.RESET_ALL}")
+        console.print(Rule("[bold white]SCAN SUMMARY[/bold white]", style="dim"))
+        console.print()
 
+        # Stats — plain rows, no card boxes
+        stats = Table(box=None, show_header=False, padding=(0, 2))
+        stats.add_column(style="dim",   no_wrap=True, min_width=20)
+        stats.add_column(no_wrap=True)
+
+        stats.add_row("Total domains",  Text(str(len(results)), style="cyan bold"))
+        stats.add_row("Vulnerable",     Text(str(len(vulns)),   style="red bold"))
+        stats.add_row("Clean",          Text(str(len(clean)),   style="green bold"))
+        stats.add_row("NXDOMAIN",       Text(str(len(nxd)),     style="yellow bold"))
+
+        console.print(stats)
+
+        # Vulnerable domain list
         if vulns:
-            print(f"\n  {Fore.RED}{Style.BRIGHT}DOMAIN VULNERABLE:{Style.RESET_ALL}")
+            console.print()
+            console.print("  [red bold]DOMAIN VULNERABLE:[/red bold]")
             for r in vulns:
                 for v in r.vulnerabilities:
-                    conf_color = Fore.RED if v.confidence == "HIGH" else Fore.YELLOW
-                    print(
-                        f"    {Fore.RED}◆{Style.RESET_ALL} "
-                        f"{Fore.WHITE}{r.domain}{Style.RESET_ALL} "
-                        f"→ {Fore.MAGENTA}{v.service}{Style.RESET_ALL} "
-                        f"[{conf_color}{v.confidence}{Style.RESET_ALL}] "
-                        f"{Fore.YELLOW}({v.vuln_type}){Style.RESET_ALL}"
-                    )
+                    score     = _parse_score(v.details)
+                    score_str = f"  score {score}/100" if score else ""
+                    c_style   = _conf_style(v.confidence)
 
-        print(f"  {_SEP}\n")
+                    line = Text("    ◆ ", style="red")
+                    line.append(r.domain,       style="white")
+                    line.append(" → ",          style="dim")
+                    line.append(v.service,      style="magenta")
+                    line.append("  ")
+                    line.append(v.confidence,   style=c_style)
+                    line.append(score_str,      style="dim")
+                    line.append(f"  ({v.vuln_type})", style="yellow dim")
+                    console.print(line)
 
-    # ── JSON export ──────────────────────────────────────────────────────────
+        console.print()
+        console.print(Rule(style="dim"))
+        console.print(f"  [dim]Elapsed time: {elapsed:.2f}s[/dim]")
+        console.print()
+
+    # ── verbose per-domain DNS info ───────────────────────────────────────────
 
     @staticmethod
-    def export_json(results: list[ScanResult], output_path: str) -> None:
-        """Serialize *results* to a JSON file at *output_path*."""
+    def print_dns_detail(result: ScanResult) -> None:
+        """Optional verbose DNS breakdown — call only when --verbose is set."""
+        if not result.dns:
+            return
+        dns = result.dns
+        parts: list[str] = []
+        if dns.cname_chain:
+            last = dns.cname_chain[-1]
+            parts.append(f"CNAME → {last.get('to', '?')}")
+        if dns.a_records:
+            parts.append(f"{len(dns.a_records)} A record(s)")
+        if dns.nxdomain:
+            parts.append("NXDOMAIN")
+        if parts:
+            console.print(f"    [dim]└─ {' · '.join(parts)}[/dim]")
+
+    # ── JSON export ───────────────────────────────────────────────────────────
+
+    @staticmethod
+    def export_json(results: list[ScanResult], path: str) -> None:
         data = []
         for r in results:
             data.append({
@@ -158,6 +299,7 @@ class Reporter:
                         "type":           v.vuln_type,
                         "service":        v.service,
                         "confidence":     v.confidence,
+                        "score":          _parse_score(v.details),
                         "details":        v.details,
                         "cname_chain":    v.cname_chain,
                         "evidence":       v.evidence,
@@ -168,9 +310,7 @@ class Reporter:
                 ],
             })
 
-        with open(output_path, "w") as fh:
+        with open(path, "w") as fh:
             json.dump(data, fh, indent=2)
 
-        print(
-            f"  {Fore.GREEN}✓ Results saved to: {output_path}{Style.RESET_ALL}"
-        )
+        console.print(f"  [green]✓ Results saved → {path}[/green]")

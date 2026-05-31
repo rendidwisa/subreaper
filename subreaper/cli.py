@@ -12,12 +12,18 @@ import sys
 import time
 from datetime import datetime
 
-from colorama import Fore, Style, init
+from colorama import init
+from rich.console import Console
+from rich.table import Table
+from rich.rule import Rule
+from rich.text import Text
+from rich import box
 
 from subreaper.reporter import BANNER
 from subreaper.scanner import SubReaper
 
 init(autoreset=True)
+console = Console()
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ARGUMENT PARSER
@@ -94,9 +100,7 @@ def _load_domains(args: argparse.Namespace) -> list[str]:
             with open(args.file) as fh:
                 domains.extend(line.strip() for line in fh if line.strip())
         except FileNotFoundError:
-            print(
-                f"  {Fore.RED}Error: file not found — {args.file}{Style.RESET_ALL}"
-            )
+            console.print(f"  [bold red]Error:[/bold red] file not found — {args.file}")
             sys.exit(1)
 
     # Preserve insertion order while removing duplicates
@@ -106,15 +110,20 @@ def _load_domains(args: argparse.Namespace) -> list[str]:
 def _print_header(domains: list[str], args: argparse.Namespace) -> None:
     """Print the pre-scan configuration summary."""
     ns_display = args.nameservers or "8.8.8.8, 1.1.1.1, 9.9.9.9 (default)"
-    print(f"  {Fore.CYAN}Target     : {Fore.WHITE}{len(domains)} domain{Style.RESET_ALL}")
-    print(f"  {Fore.CYAN}Concurrency: {Fore.WHITE}{args.concurrency}{Style.RESET_ALL}")
-    print(f"  {Fore.CYAN}Timeout    : {Fore.WHITE}{args.timeout}s{Style.RESET_ALL}")
-    print(f"  {Fore.CYAN}Nameservers: {Fore.WHITE}{ns_display}{Style.RESET_ALL}")
-    print(
-        f"  {Fore.CYAN}Started at  : "
-        f"{Fore.WHITE}{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}{Style.RESET_ALL}"
-    )
-    print(f"  {'━' * 60}\n")
+
+    tbl = Table(box=box.SIMPLE, show_header=False, padding=(0, 1), min_width=62)
+    tbl.add_column(style="cyan",  no_wrap=True, min_width=14)
+    tbl.add_column(style="white")
+
+    tbl.add_row("Target",      f"{len(domains)} domain{'s' if len(domains) > 1 else ''}")
+    tbl.add_row("Concurrency", str(args.concurrency))
+    tbl.add_row("Timeout",     f"{args.timeout}s")
+    tbl.add_row("Nameservers", ns_display)
+    tbl.add_row("Started at",  datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+    console.print(tbl)
+    console.print(Rule(style="dim"))
+    console.print()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -122,21 +131,21 @@ def _print_header(domains: list[str], args: argparse.Namespace) -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def async_main() -> None:
-    print(BANNER)
+    console.print(BANNER)
 
-    parser  = build_parser()
-    args    = parser.parse_args()
+    parser = build_parser()
+    args   = parser.parse_args()
 
     if not args.domain and not args.file:
         parser.print_help()
-        print(
-            f"\n  {Fore.RED}Error: must specify either -d <domain> or -f <file>{Style.RESET_ALL}"
+        console.print(
+            "\n  [bold red]Error:[/bold red] must specify either -d <domain> or -f <file>"
         )
         sys.exit(1)
 
     domains = _load_domains(args)
     if not domains:
-        print(f"  {Fore.YELLOW}No domains to scan.{Style.RESET_ALL}")
+        console.print("  [yellow]No domains to scan.[/yellow]")
         sys.exit(0)
 
     nameservers = None
@@ -156,11 +165,11 @@ async def async_main() -> None:
     await scanner.scan_all(domains)
     elapsed_total = time.time() - start_total
 
-    scanner.print_summary()
-    print(f"  {Fore.CYAN}Elapsed time: {elapsed_total:.2f} seconds{Style.RESET_ALL}\n")
+    scanner.print_summary(elapsed_total)
 
     if args.output:
         scanner.export_json(args.output)
+        console.print(f"  [dim cyan]Saved →[/dim cyan] {args.output}\n")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -172,5 +181,5 @@ def main() -> None:
     try:
         asyncio.run(async_main())
     except KeyboardInterrupt:
-        print(f"\n\n  {Fore.YELLOW}Scan interrupted.{Style.RESET_ALL}\n")
+        console.print("\n\n  [yellow]Scan interrupted.[/yellow]\n")
         sys.exit(0)
