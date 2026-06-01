@@ -253,7 +253,8 @@ class DNSAnalyzer:
 
         a_records = self.resolve(domain, "A")
         if "__NXDOMAIN__" in a_records:
-            info.nxdomain = True
+            if not info.cname_chain:
+                info.nxdomain = True
         elif "__TIMEOUT__" not in a_records:
             info.a_records = a_records
 

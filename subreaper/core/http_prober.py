@@ -1,91 +1,271 @@
+"""
+HTTP Prober for SubReaper.
+
+Probes a domain over HTTPS then HTTP, reads a body slice for fingerprinting,
+and returns a normalised result dict consumed by VulnDetector._probe_http().
+"""
+
+from __future__ import annotations
+
 import asyncio
-import aiohttp
+import re
 from typing import Optional
 
+import aiohttp
+import ssl as ssl_module
+
+# ── Constants ─────────────────────────────────────────────────────────────────
+
+_PROVIDER_HEADER_PREFIXES = (
+    "x-amz-",
+    "x-azure-",
+    "x-fastly-",
+    "x-vercel-",
+    "x-github-",
+    "x-netlify-",
+    "x-powered-by",
+    "x-wp-",
+    "cf-ray",      
+    "x-cdn",
+    "x-zendesk-",
+    "x-shopify-",
+    "x-heroku-",
+    "x-served-by",
+)
+
+_BODY_LIMIT = 8_000
+
+_SCHEMES = ("https", "http")
+
+_MAX_REDIRECTS = 5
+_MAX_RETRIES   = 3
+_BACKOFF_BASE  = 1.5      # seconds; attempt 0 → 0s, 1 → 1.5s, 2 → 2.25s
+
+_DEFAULT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.5",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",     
+    "Sec-Fetch-Mode": "navigate",   
+    "Sec-Fetch-Site": "none",       
+    "Sec-Fetch-User": "?1",         
+    "Cache-Control": "max-age=0",  
+}
+
+_BARE_ERROR_PATTERNS: tuple[re.Pattern, ...] = tuple(
+    re.compile(p, re.IGNORECASE)
+    for p in (
+        r"<title>\s*404\s*</title>",
+        r"<title>\s*not found\s*</title>",
+        r"<title>\s*error\s*</title>",
+    )
+)
+
+
+# ── HTTPProber ────────────────────────────────────────────────────────────────
 
 class HTTPProber:
-    BODY_READ_LIMIT = 5_000
-    MAX_REDIRECTS = 5
-    SCHEMES = ["https", "http"]
-    MAX_RETRIES = 3
-    BACKOFF_BASE = 1.5
+    """
+    Minimal HTTP prober whose only job is to return enough signal for
+    VulnDetector to run fingerprint matching.
 
-    DEFAULT_HEADERS = {
-        "User-Agent": "Mozilla/5.0 (compatible; SubReaper/1.2; +https://github.com/rendidwisa/subreaper)",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    }
-
-    CLOUD_HEADER_PREFIXES = {"server", "x-amz-", "x-powered-by", "x-azure-", "x-fastly-", "x-vercel-"}
+    Return schema (always a dict):
+        status          int     HTTP status code
+        url             str     Final URL after redirects
+        body            str     First _BODY_LIMIT chars of response body
+        headers         dict    All response headers (lowercased keys)
+        provider_headers dict   Subset of headers with provider signal
+        ssl_error       bool    True when HTTPS succeeded but TLS layer warned
+        scheme          str     "https" or "http" — whichever succeeded
+        error           str     Present only on complete failure
+    """
 
     def __init__(self, timeout: int = 10):
-        self.timeout = aiohttp.ClientTimeout(total=timeout)
+        self._timeout = aiohttp.ClientTimeout(
+            total=timeout,
+            connect=min(timeout, 5),   # don't burn the whole budget on TCP
+        )
 
-    def _normalize(self, body: str) -> str:
-        return body.strip().lower()
+    # ── Public API ────────────────────────────────────────────────────────────
 
-    def _classify(self, status: int, body: str, headers: dict) -> str:
-        body_lower = body[:500].lower()
-        if any(k.lower().startswith("x-") or k.lower() in {"server", "via"} for k in headers):
-            return "GENERIC_CLOUD_PAGE"
-        if status in {401, 403, 500, 502, 503}:
-            return "ERROR_PAGE"
-        if status == 200 and len(body) > 100:
-            return "REAL_APP"
-        if status == 404 and len(body) < 200:
-            return "GENERIC_CLOUD_PAGE"
-        return "REAL_APP"
+    async def probe(
+        self,
+        domain: str,
+        custom_host: Optional[str] = None,
+        use_default_headers: bool = True,
+    ) -> dict:
+        """
+        Probe *domain* and return a result dict.
 
-    async def _request(self, url: str, headers: dict, session: aiohttp.ClientSession) -> dict:
-        for attempt in range(self.MAX_RETRIES):
+        custom_host: override the Host header.
+        use_default_headers: if False, only send minimal headers (just Host if custom_host given).
+        """
+        headers = _DEFAULT_HEADERS.copy() if use_default_headers else {}
+        if custom_host:
+            headers["Host"] = custom_host
+
+        ssl_context = ssl_module.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl_module.CERT_NONE
+
+        connector = aiohttp.TCPConnector(
+            ssl=ssl_context,
+            limit=10,              # per-prober limit; caller controls concurrency
+            enable_cleanup_closed=True,
+        )
+
+        async with aiohttp.ClientSession(
+            connector=connector,
+            timeout=self._timeout,
+            # No cookie jar — we don't want session state between retries
+            cookie_jar=aiohttp.DummyCookieJar(),
+        ) as session:
+            for scheme in _SCHEMES:
+                url = f"{scheme}://{domain}"
+                result = await self._request(url, headers, session, scheme)
+                if "error" not in result:
+                    return result
+
+        return {"error": "all_schemes_failed"}
+
+    # ── Internal request with retry ───────────────────────────────────────────
+
+    async def _request(
+        self,
+        url:     str,
+        headers: dict,
+        session: aiohttp.ClientSession,
+        scheme:  str,
+    ) -> dict:
+        last_error: str = "unknown"
+
+        for attempt in range(_MAX_RETRIES):
             try:
                 async with session.get(
                     url,
                     headers=headers,
                     allow_redirects=True,
-                    max_redirects=self.MAX_REDIRECTS,
+                    max_redirects=_MAX_REDIRECTS,
                 ) as resp:
-                    body = ""
-                    try:
-                        raw = await resp.text(errors="replace")
-                        body = raw[:self.BODY_READ_LIMIT]
-                    except Exception:
-                        pass
+                    body = await self._read_body(resp)
+                    resp_headers = {k.lower(): v for k, v in resp.headers.items()}
 
-                    resp_headers = dict(resp.headers)
-                    cloud_headers = {
-                        k: v for k, v in resp_headers.items()
-                        if any(k.lower().startswith(p) for p in self.CLOUD_HEADER_PREFIXES)
+                    provider_headers = {
+                        k: v
+                        for k, v in resp_headers.items()
+                        if any(k.startswith(p) for p in _PROVIDER_HEADER_PREFIXES)
                     }
 
                     return {
-                        "status": resp.status,
-                        "url": str(resp.url),
-                        "body": body,
-                        "headers": resp_headers,
-                        "cloud_headers": cloud_headers,
-                        "classification": self._classify(resp.status, body, resp_headers),
+                        "status":           resp.status,
+                        "url":              str(resp.url),
+                        "body":             body,
+                        "headers":          resp_headers,
+                        "provider_headers": provider_headers,
+                        "ssl_error":        False,
+                        "scheme":           scheme,
+                        "classification":   self._classify(resp.status, body, resp_headers),
                     }
-            except (aiohttp.ClientConnectorError, asyncio.TimeoutError):
-                if attempt == self.MAX_RETRIES - 1:
-                    return {"error": "timeout" if isinstance(asyncio.TimeoutError, type(None)) else "connection_refused"}
-                await asyncio.sleep(self.BACKOFF_BASE ** attempt)
-            except Exception as e:
-                return {"error": str(e)[:100]}
-        return {"error": "max_retries_exceeded"}
 
-    async def probe(self, domain: str, custom_host: Optional[str] = None) -> dict:
-        connector = aiohttp.TCPConnector(ssl=False, limit=50)
-        headers = self.DEFAULT_HEADERS.copy()
-        if custom_host:
-            headers["Host"] = custom_host
+            except aiohttp.ServerFingerprintMismatch:
+                # TLS server presented a cert that doesn't match the hostname —
+                last_error = "ssl_fingerprint_mismatch"
+                break
 
-        async with aiohttp.ClientSession(
-            connector=connector,
-            timeout=self.timeout,
-        ) as session:
-            for scheme in self.SCHEMES:
-                url = f"{scheme}://{domain}"
-                result = await self._request(url, headers, session)
-                if "error" not in result:
-                    return result
-        return {"error": "connection_refused"}
+            except aiohttp.ClientSSLError as exc:
+                # SSL protocol error at the aiohttp/OpenSSL layer — distinct from
+                last_error = f"ssl_error:{type(exc).__name__}"
+                break
+
+            except aiohttp.ClientConnectorError as exc:
+                # Connection refused, DNS failure for the URL host, etc.
+                last_error = f"connector:{type(exc).__name__}"
+                if attempt < _MAX_RETRIES - 1:
+                    await asyncio.sleep(_BACKOFF_BASE ** attempt)
+
+            except asyncio.TimeoutError:
+                last_error = "timeout"
+                if attempt < _MAX_RETRIES - 1:
+                    await asyncio.sleep(_BACKOFF_BASE ** attempt)
+
+            except aiohttp.TooManyRedirects:
+                # Redirect loop — not worth retrying
+                last_error = "too_many_redirects"
+                break
+
+            except aiohttp.ClientResponseError as exc:
+                last_error = f"response_error:{exc.status}"
+                break
+
+            except Exception as exc:
+                last_error = f"unexpected:{type(exc).__name__}:{str(exc)[:60]}"
+                break
+
+        return {"error": last_error}
+
+    # ── Body reader ───────────────────────────────────────────────────────────
+
+    @staticmethod
+    async def _read_body(resp: aiohttp.ClientResponse) -> str:
+        """
+        Read up to _BODY_LIMIT characters.  Never raises — returns "" on error.
+        """
+        try:
+            raw = await resp.content.read(_BODY_LIMIT)
+            # Decode with replacement so binary / broken encodings don't crash us
+            return raw.decode(resp.charset or "utf-8", errors="replace")
+        except Exception:
+            return ""
+
+    # ── Response classifier ───────────────────────────────────────────────────
+
+    @staticmethod
+    def _classify(status: int, body: str, headers: dict) -> str:
+
+        if status in {301, 302, 303, 307, 308}:
+            return "REDIRECT"
+
+        if status in {500, 502, 503, 504}:
+            return "ERROR_PAGE"
+
+        body_short = body[:500]
+
+        has_provider_headers = any(
+            k.startswith(p)
+            for k in headers
+            for p in _PROVIDER_HEADER_PREFIXES
+        )
+
+        is_bare_404 = (
+            len(body) < 300
+            or any(p.search(body_short) for p in _BARE_ERROR_PATTERNS)
+        )
+
+        # ── 404 LOGIC ─────────────────────────────
+        if status == 404:
+            if has_provider_headers:
+                return "POTENTIAL_TAKEOVER"
+
+            if is_bare_404:
+                return "GENERIC_404"
+
+            return "CUSTOM_404"
+
+        # ── 200 LOGIC ─────────────────────────────
+        if status == 200:
+
+            if len(body.strip()) < 300:
+                if has_provider_headers:
+                    return "SUSPICIOUS_EMPTY_PAGE"
+                return "EMPTY_PAGE"
+
+            return "REAL_APP"
+
+        return "UNKNOWN"

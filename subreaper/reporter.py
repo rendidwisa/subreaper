@@ -35,7 +35,7 @@ BANNER = """\
   ███████║╚██████╔╝██████╔╝██║  ██║███████╗██║  ██║██║     ███████╗██║  ██║
   ╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝     ╚══════╝╚═╝  ╚═╝
 [/red bold]
-[yellow]  [ Subdomain Takeover & DNS Vulnerability Scanner — v1.1.0 ][/yellow]
+[yellow]  [ Subdomain Takeover & DNS Vulnerability Scanner — v1.1.1 ][/yellow]
 [cyan]  [ Pentest & Bug Bounty — By @rendidwisa ][/cyan]
 """
 
@@ -51,6 +51,13 @@ def _parse_score(details: str) -> Optional[int]:
 def _conf_style(confidence: str) -> str:
     return "red bold" if confidence == "HIGH" else "yellow bold"
 
+def _vuln_type_style(vuln_type: str) -> str:
+    return {
+        "SUBDOMAIN_TAKEOVER":         "red bold",
+        "DANGLING_CNAME":             "yellow bold",
+        "NS_TAKEOVER":                "red bold",
+        "UNCLAIMED_PROVIDER_ACCOUNT": "orange1 bold",
+    }.get(vuln_type, "yellow dim")
 
 def _status_text(status: str) -> Text:
     mapping = {
@@ -158,8 +165,43 @@ class Reporter:
         if result.status == "VULNERABLE":
             Reporter.print_vuln(result)
 
-    # ── vulnerability detail block ────────────────────────────────────────────
+    # ── HTTP provider signal headers to extract and pass to VulnDetector ────────────────
+    @staticmethod
+    def print_clean(result: ScanResult, verbose: bool = False) -> None:
+        """Print a single CLEAN domain line, optionally with DNS detail."""
+        ts   = datetime.now().strftime("%H:%M:%S")
+        line = Text()
+        line.append(f"  {ts} ", style="dim")
+        line.append("[")
+        line.append(Text("CLEAN", style="bold green"))
+        line.append("] ")
+        line.append(result.domain, style="white")
 
+        if verbose and result.dns and result.dns.cname_chain:
+            last = result.dns.cname_chain[-1].get("to", "")
+            if last:
+                line.append(f"  → {last}", style="dim")
+
+        console.print(line)
+
+    @staticmethod
+    def print_status(domain: str, status: str) -> None:
+        """Print a single status line for NXDOMAIN / ERROR states."""
+        ts    = datetime.now().strftime("%H:%M:%S")
+        label, style = {
+            "NXDOMAIN": ("NXDOMAIN", "bold yellow"),
+            "ERROR":    ("ERROR",    "bold yellow"),
+        }.get(status, (status, "dim"))
+
+        line = Text()
+        line.append(f"  {ts} ", style="dim")
+        line.append("[")
+        line.append(Text(label, style=style))
+        line.append("] ")
+        line.append(domain, style="white")
+        console.print(line)
+
+    # ── vulnerability detail block ────────────────────────────────────────────
     @staticmethod
     def print_vuln(result: ScanResult) -> None:
         for vuln in result.vulnerabilities:
@@ -168,10 +210,16 @@ class Reporter:
             c_style   = _conf_style(vuln.confidence)
 
             console.print()
-            console.print(Rule(
-                title="[on red][white] ⚠ VULNERABILITY FOUND [/white][/on red]",
-                style="red dim",
-            ))
+            if vuln.vuln_type == "UNCLAIMED_PROVIDER_ACCOUNT":
+                console.print(Rule(
+                    title="[on dark_orange][white] ⚠ UNCLAIMED ACCOUNT DETECTED [/white][/on dark_orange]",
+                    style="orange1 dim",
+                ))
+            else:
+                console.print(Rule(
+                    title="[on red][white] ⚠ VULNERABILITY FOUND [/white][/on red]",
+                    style="red dim",
+                ))
 
             t = Table(box=None, show_header=False, padding=(0, 1), min_width=60)
             t.add_column(style="dim",   no_wrap=True, min_width=12)
@@ -247,7 +295,7 @@ class Reporter:
                     line.append("  ")
                     line.append(v.confidence,   style=c_style)
                     line.append(score_str,      style="dim")
-                    line.append(f"  ({v.vuln_type})", style="yellow dim")
+                    line.append(f"  ({v.vuln_type})", style=_vuln_type_style(v.vuln_type))
                     console.print(line)
 
         console.print()

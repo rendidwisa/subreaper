@@ -159,10 +159,8 @@ class VulnDetector:
         state.evidence.append(f"PROVIDER:{provider['service']}")
 
         # Step 6: multi-resolver consensus on the CNAME target
-        state.consensus = await self._resolver_consensus(last_target)
-
         if not state.is_dangling:
-            state.consensus = await self._resolver_consensus(last_target)
+            state.consensus = await self._resolver_consensus(last_target) 
             if not state.consensus.reached and not state.consensus.inconclusive:
                 return findings
             if state.consensus.inconclusive:
@@ -175,7 +173,6 @@ class VulnDetector:
             state.evidence.append("CONSENSUS:SKIPPED(dangling)")
 
         # Step 7: wildcard guard
-        state.wildcard_detected = await self._has_wildcard(domain)
         if not state.is_dangling:
             state.wildcard_detected = await self._has_wildcard(domain)
             if state.wildcard_detected:
@@ -183,7 +180,7 @@ class VulnDetector:
                 return findings
 
         # Step 8: HTTP probe + fingerprint matching
-        state.http = await self._probe_http(domain, provider)
+        state.http = await self._probe_http(domain, provider, state)
 
         # Step 9: TLS info (informational — adds a small score bonus)
         state.tls = await self._collect_tls(domain)
@@ -221,6 +218,7 @@ class VulnDetector:
 
         visited:      set[str] = set()
         last_valid:   str      = ""
+        first_provider_match: str = ""
         dangling_from: str     = ""
         is_dangling:  bool     = False
 
@@ -249,8 +247,10 @@ class VulnDetector:
                 break
 
             last_valid = dst
-
-        return last_valid, is_dangling, dangling_from
+            if not first_provider_match and self._match_provider(dst):
+                first_provider_match = dst
+        final_target = first_provider_match if first_provider_match else last_valid
+        return final_target, is_dangling, dangling_from
 
     # ── Provider matching ─────────────────────────────────────────────────────
 
@@ -316,8 +316,7 @@ class VulnDetector:
         return bool(info.cname_chain or info.a_records)
 
     # ── HTTP probe ────────────────────────────────────────────────────────────
-
-    async def _probe_http(self, domain: str, provider: dict) -> _HTTPResult:
+    async def _probe_http(self, domain: str, provider: dict, state: _State = None) -> _HTTPResult:
         result = _HTTPResult()
 
         raw = None
@@ -326,6 +325,10 @@ class VulnDetector:
             if raw and "error" not in raw:
                 break
             await asyncio.sleep(HTTP_RETRY_DELAY)
+
+        # Fallback: gunakan custom_host = CNAME target jika probe normal gagal
+        if (not raw or "error" in raw) and state and state.last_cname_target:
+            raw = await self.http.probe(state.last_cname_target, use_default_headers=False)
 
         if not raw or "error" in raw:
             return result
@@ -388,7 +391,6 @@ class VulnDetector:
         return tls
 
     # ── Scoring ───────────────────────────────────────────────────────────────
-
     def _score(self, state: _State) -> None:
         score = 0
 
@@ -399,8 +401,20 @@ class VulnDetector:
             and state.consensus.nxdomain_votes >= NXDOMAIN_CONSENSUS_THRESHOLD
         ):
             score += 30
+        elif (
+            # Scenario B: CNAME to an active provider but the body fingerprint matches
+            # The server is still alive but the account may have become orphaned/claimable
+            state.consensus
+            and state.consensus.valid_votes >= NXDOMAIN_CONSENSUS_THRESHOLD
+            and state.http
+            and state.http.status in (403, 404, 409)
+            and not state.http.negative_signal
+            and state.provider.get("claimable")
+            #and state.http.fingerprint_strength >= STRENGTH_SCORE["MEDIUM"]
+        ):
+            score += 25 + (10 if state.provider.get("claimable") else 0) # lower than NXDOMAIN because less certain
 
-        score += 20  # known provider match (or generic dangling)
+        score += 20  # known provider match
 
         http = state.http
         if http:
@@ -425,7 +439,20 @@ class VulnDetector:
             return None
 
         confidence = "HIGH" if state.score >= SCORE_THRESHOLD_HIGH else "MEDIUM"
-        vuln_type  = "DANGLING_CNAME" if state.is_dangling else "SUBDOMAIN_TAKEOVER"
+        is_unclaimed_account = (
+            not state.is_dangling
+            and state.consensus
+            and state.consensus.valid_votes >= NXDOMAIN_CONSENSUS_THRESHOLD
+            and state.http
+            and state.http.body_match
+            and not state.provider.get("claimable", False)  
+        )
+        if state.is_dangling:
+            vuln_type = "DANGLING_CNAME"
+        elif is_unclaimed_account and state.http and state.http.body_match:
+            vuln_type = "UNCLAIMED_PROVIDER_ACCOUNT"  # Scenario B
+        else:
+            vuln_type = "SUBDOMAIN_TAKEOVER"
 
         evidence = list(state.evidence)
         if state.http and state.http.body_match:
@@ -441,6 +468,17 @@ class VulnDetector:
             rec = (
                 "Remove the dangling DNS record or reclaim the target resource. "
                 "Ensure the provider account or domain cannot be registered externally."
+            )
+        elif vuln_type == "UNCLAIMED_PROVIDER_ACCOUNT":
+            details = (
+                f"CNAME points to an active {state.provider['service']} server but "
+                f"the account/resource may be unclaimed or claimable. "
+                f"Score: {state.score}/100"
+            )
+            rec = (
+                f"Verify that the {state.provider['service']} account linked to this "
+                f"subdomain is still owned by your organization. "
+                "If the account was deleted, an attacker can re-register it."
             )
         else:
             details = (

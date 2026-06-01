@@ -179,6 +179,7 @@ TAKEOVER_FINGERPRINTS = [
         "response_fingerprints": [
             _fp("Failed to resolve DNS for this domain"),
             _fp("Site does not exist"),
+            _fp("domain error", STRENGTH_MEDIUM, SIGNAL_ORPHAN),
         ],
         "http_codes": [404],
         "confidence": "HIGH",
@@ -258,6 +259,7 @@ TAKEOVER_FINGERPRINTS = [
         "response_fingerprints": [
             _fp("Not Found - Request ID"),
             _fp("No site with that URL"),
+            _fp("site not found", STRENGTH_STRONG, SIGNAL_ORPHAN),
         ],
         "http_codes": [404],
         "confidence": "HIGH",
@@ -287,6 +289,9 @@ TAKEOVER_FINGERPRINTS = [
         "cname_patterns": ["readthedocs.io", "readthedocs.org"],
         "response_fingerprints": [
             _fp("Unknown Host"),
+            _fp("readthedocs.org/404", STRENGTH_MEDIUM, SIGNAL_ORPHAN),
+            _fp("This page does not exist", STRENGTH_WEAK, SIGNAL_AMBIGUOUS),
+            _fp("No project with that slug", STRENGTH_MEDIUM, SIGNAL_ORPHAN),
         ],
         "http_codes": [404],
         "confidence": "HIGH",
@@ -316,8 +321,11 @@ TAKEOVER_FINGERPRINTS = [
         "response_fingerprints": [
             _fp("Sorry, this shop is currently unavailable."),
             _fp("Only one step left!", STRENGTH_MEDIUM),
+            _fp("is not available", STRENGTH_MEDIUM, SIGNAL_ORPHAN),
+            _fp("shops.myshopify.com", STRENGTH_MEDIUM, SIGNAL_ORPHAN),
+            _fp("myshopify.com", STRENGTH_WEAK, SIGNAL_AMBIGUOUS),
         ],
-        "http_codes": [404],
+        "http_codes": [404, 200, 403],
         "confidence": "HIGH",
         "claimable": True,
         "provider_type": PROVIDER_TYPE_SAAS,
@@ -374,6 +382,9 @@ TAKEOVER_FINGERPRINTS = [
         "response_fingerprints": [
             _fp("The deployment you are trying to access does not exist"),
             _fp("This deployment has been disabled", STRENGTH_MEDIUM),
+            _fp("404: not_found", STRENGTH_MEDIUM, SIGNAL_ORPHAN),
+            _fp("DEPLOYMENT_NOT_FOUND", STRENGTH_STRONG, SIGNAL_ORPHAN),
+            _fp("The deployment could not be found on Vercel", STRENGTH_STRONG, SIGNAL_ORPHAN),
         ],
         "http_codes": [404],
         "confidence": "MEDIUM",
@@ -388,6 +399,7 @@ TAKEOVER_FINGERPRINTS = [
         "cname_patterns": ["wpengine.com"],
         "response_fingerprints": [
             _fp("The site you were looking for couldn't be found"),
+            _fp("site is not available", STRENGTH_STRONG, SIGNAL_ORPHAN),
         ],
         "http_codes": [404],
         "confidence": "HIGH",
@@ -403,8 +415,11 @@ TAKEOVER_FINGERPRINTS = [
         "response_fingerprints": [
             _fp("Help Center Closed"),
             _fp("Page not found", STRENGTH_WEAK, SIGNAL_AMBIGUOUS),
+            _fp("zendesk.com/hc", STRENGTH_WEAK, SIGNAL_AMBIGUOUS),
+            _fp("almost there", STRENGTH_MEDIUM, SIGNAL_ORPHAN),
+            _fp("this account is not active", STRENGTH_STRONG, SIGNAL_ORPHAN),
         ],
-        "http_codes": [404],
+        "http_codes": [404, 200], # Zendesk returns 200 even for closed accounts
         "confidence": "HIGH",
         "claimable": True,
         "provider_type": PROVIDER_TYPE_SAAS,
