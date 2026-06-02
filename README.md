@@ -1,18 +1,19 @@
 # SubReaper — Subdomain Takeover & Vulnerability Scanner
 
 A scanner for **subdomain takeover** and **DNS vulnerability** detection.
-Built for bug bounty hunters and pentesters with a **zero false positive** design.
+Built for bug bounty hunters and pentesters with a **precision-focused detection** design.
 
 ---
 
 ## Key Features
 
-* Dangling CNAME detection (CNAME chains pointing to unregistered domains)
-* Identifies 20+ services (GitHub Pages, Heroku, AWS S3, Azure, etc.)
-* HTTP body fingerprint validation for high accuracy
-* NS takeover detection
-* Blazing-fast concurrent scanning
-* Colored terminal output + JSON export
+- **Subdomain Takeover Detection** – Dangling CNAME, NS takeover, and unclaimed provider accounts (20+ services)
+- **High-Accuracy Validation** – HTTP body fingerprint matching with scenario-based scoring
+- **IP Intelligence** – Origin IP resolution with ASN, organization, country, city, and coordinates via MaxMind GeoLite2 (offline) or DNS fallback (online)
+- **WAF & SNI Bypass** – Handles Cloudflare-protected services and Vercel SNI mismatches automatically
+- **Concurrent Scanning** – Blazing-fast async scanning with configurable concurrency
+- **Professional Reporting** – Colored terminal output, verbose DNS details, and JSON export
+- **Precision-Focused Detection** – Multi-resolver consensus, wildcard guard, and negative signal filtering to minimize false positives
 
 ---
 
@@ -24,6 +25,11 @@ git clone https://github.com/rendidwisa/subreaper.git
 cd subreaper
 
 # Install with pip
+pip install .
+
+# if error environment 
+python3 -m venv subreaper
+source subreaper/bin/activate
 pip install .
 ```
 
@@ -69,6 +75,31 @@ subreaper -f subs.txt -c 30 -t 15
 subfinder -d target.com -silent | subreaper -f /dev/stdin
 ```
 
+### IP Intelligence (ASN & GeoIP)
+
+SubReaper automatically resolves the origin IP of each CNAME target and, if the
+optional MaxMind GeoLite2 databases are present, enriches every report with:
+
+* **ASN** (Autonomous System Number) and organisation name
+* **Country**, **city**, and approximate **coordinates**
+
+This extra data helps verify whether the resolved IP really belongs to the
+claimed provider (e.g. `AS16509 Amazon` for Heroku) and makes bug bounty
+reports far more credible.
+
+Without the databases, SubReaper still provides ASN and country via a
+privacy-friendly DNS fallback, but city-level detail requires the databases.
+
+### Obtaining the GeoLite2 Databases
+
+1. Create a free MaxMind account at <https://www.maxmind.com/en/geolite2/signup>
+2. After login, go to <https://www.maxmind.com/en/accounts/current/license-key>
+   and copy your license key.
+3. Run the integrated setup wizard:
+
+```bash 
+subreaper -S 
+```
 ---
 
 ## Full Options
@@ -82,6 +113,7 @@ subfinder -d target.com -silent | subreaper -f /dev/stdin
 | `--timeout`     | `-t`  | DNS & HTTP timeout in seconds (default: 10)                |
 | `--nameservers` | `-n`  | Comma-separated custom DNS servers                         |
 | `--verbose`     | `-v`  | Show every domain status (including CLEAN/NXDOMAIN)        |
+| `--setup-geoip` | `-S`  | Download MaxMind GeoLite2 databases for enhanced IP        |
 
 ---
 
@@ -94,6 +126,7 @@ Dependencies (auto-installed via `pip install .`):
 * aiohttp
 * dnspython
 * colorama
+* geoip
 
 ---
 
