@@ -98,7 +98,7 @@ class _State:
 
     score:    int  = 0
     evidence: list = field(default_factory=list)
-
+    origin_ips: list = field(default_factory=list)
 
 # ── Detector ──────────────────────────────────────────────────────────────────
 
@@ -185,6 +185,12 @@ class VulnDetector:
         # Step 9: TLS info (informational — adds a small score bonus)
         state.tls = await self._collect_tls(domain)
 
+        # ── NEW: Resolve origin IPs ─────────────────────────────────────────
+        target_for_ip = state.last_cname_target or domain
+        state.origin_ips = await self._resolve_a(target_for_ip)
+        if state.origin_ips:
+            state.evidence.append(f"ORIGIN_IPS:{','.join(state.origin_ips)}")
+
         # Step 10: score → emit
         self._score(state)
         result = self._build_result(state)
@@ -192,6 +198,13 @@ class VulnDetector:
             findings.append(result)
 
         return findings
+
+    async def _resolve_a(self, domain: str) -> list[str]:
+        try:
+            answers = dns.resolver.resolve(domain, 'A')
+            return sorted({r.to_text() for r in answers})
+        except Exception:
+            return []
 
     # ── Chain parsing ─────────────────────────────────────────────────────────
 
@@ -358,6 +371,16 @@ class VulnDetector:
         result.status_matches_provider = result.status in provider.get("http_codes", [])
         return result
 
+    # ── A record resolution ───────────────────────────────────────────────────
+
+    async def _resolve_a(self, domain: str) -> list[str]:
+        """Resolve A records for the given domain, return sorted IP list."""
+        try:
+            answers = dns.resolver.resolve(domain, 'A')
+            return sorted({r.to_text() for r in answers})
+        except Exception:
+            return []
+
     # ── TLS info ──────────────────────────────────────────────────────────────
 
     async def _collect_tls(self, domain: str) -> _TLSInfo:
@@ -429,7 +452,8 @@ class VulnDetector:
 
         if state.tls and state.tls.valid:
             score += 5
-
+        if state.origin_ips and state.provider:
+            score += 2
         state.score = max(score, 0)
 
     # ── Result builder ────────────────────────────────────────────────────────
@@ -502,6 +526,7 @@ class VulnDetector:
             ],
             evidence=evidence,
             http_status=state.http.status if state.http else None,
+            origin_ips=state.origin_ips,
             recommendation=rec,
         )
 

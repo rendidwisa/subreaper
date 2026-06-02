@@ -249,6 +249,12 @@ class Reporter:
             if vuln.http_status:
                 t.add_row("HTTP Status", Text(str(vuln.http_status), style="red"))
 
+            if vuln.origin_ips:
+                ips_text = Text()
+                for ip in vuln.origin_ips:
+                    ips_text.append(f"{ip} ", style="cyan")
+                t.add_row("Origin IPs", ips_text)
+
             t.add_row("Fix", Text(vuln.recommendation, style="green"))
 
             console.print(t)
@@ -297,6 +303,10 @@ class Reporter:
                     line.append(score_str,      style="dim")
                     line.append(f"  ({v.vuln_type})", style=_vuln_type_style(v.vuln_type))
                     console.print(line)
+                    if v.origin_ips:
+                        ip_line = Text("       IPs: ", style="dim")
+                        ip_line.append(", ".join(v.origin_ips), style="cyan")
+                        console.print(ip_line)
 
         console.print()
         console.print(Rule(style="dim"))
@@ -352,6 +362,7 @@ class Reporter:
                         "cname_chain":    v.cname_chain,
                         "evidence":       v.evidence,
                         "http_status":    v.http_status,
+                        "origin_ips":     v.origin_ips,
                         "recommendation": v.recommendation,
                     }
                     for v in r.vulnerabilities
