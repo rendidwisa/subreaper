@@ -2,3 +2,4 @@ aiohttp>=3.8
 dnspython>=2.3
 colorama>=0.4
 rich>=13.0
+geoip2>=4.8.0
