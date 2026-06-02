@@ -16,7 +16,7 @@ from subreaper.core.dns_analyzer import DNSAnalyzer
 from subreaper.core.http_prober import HTTPProber
 from subreaper.data.fingerprints import TAKEOVER_FINGERPRINTS, STRENGTH_SCORE
 from subreaper.models import DNSInfo, VulnResult
-
+from subreaper.core.ip_intel import lookup as ip_lookup
 
 # ── Thresholds ────────────────────────────────────────────────────────────────
 
@@ -99,6 +99,7 @@ class _State:
     score:    int  = 0
     evidence: list = field(default_factory=list)
     origin_ips: list = field(default_factory=list)
+    asn_info: list = field(default_factory=list) 
 
 # ── Detector ──────────────────────────────────────────────────────────────────
 
@@ -190,6 +191,21 @@ class VulnDetector:
         state.origin_ips = await self._resolve_a(target_for_ip)
         if state.origin_ips:
             state.evidence.append(f"ORIGIN_IPS:{','.join(state.origin_ips)}")
+
+        # ── NEW: ASN ────────────────────────────────────────────────────────
+        state.asn_info = []
+        for ip in state.origin_ips:
+            info = ip_lookup(ip)
+            if info:
+                state.asn_info.append(info)
+                city = f", {info['city']}" if info.get('city') else ""
+                latlon = ""
+                if info.get('latitude') and info.get('longitude'):
+                    latlon = f" ({info['latitude']:.2f},{info['longitude']:.2f})"
+                org = f" ({info['asn_org']})" if info.get('asn_org') else ""
+                state.evidence.append(
+                    f"IP_INFO:{ip} → AS{info['asn']}{org} [{info['country']}{city}{latlon}]"
+                )
 
         # Step 10: score → emit
         self._score(state)
@@ -527,6 +543,7 @@ class VulnDetector:
             evidence=evidence,
             http_status=state.http.status if state.http else None,
             origin_ips=state.origin_ips,
+            asn_info=state.asn_info, 
             recommendation=rec,
         )
 

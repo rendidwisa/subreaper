@@ -255,6 +255,20 @@ class Reporter:
                     ips_text.append(f"{ip} ", style="cyan")
                 t.add_row("Origin IPs", ips_text)
 
+            if vuln.asn_info:
+                asn_text = Text()
+                for info in vuln.asn_info:
+                    org = f" ({info['asn_org']})" if info.get('asn_org') else ""
+                    city = f" - {info['city']}" if info.get('city') else ""
+                    latlon = ""
+                    if info.get('latitude') and info.get('longitude'):
+                        latlon = f" ({info['latitude']:.2f},{info['longitude']:.2f})"
+                    asn_text.append(
+                        f"AS{info['asn']}{org} [{info['country']}{city}{latlon}]  ",
+                        style="cyan"
+                    )
+                t.add_row("ASN / GeoIP", asn_text)
+
             t.add_row("Fix", Text(vuln.recommendation, style="green"))
 
             console.print(t)
@@ -307,6 +321,18 @@ class Reporter:
                         ip_line = Text("       IPs: ", style="dim")
                         ip_line.append(", ".join(v.origin_ips), style="cyan")
                         console.print(ip_line)
+                    if v.asn_info:
+                        asn_line = Text("       ASN: ", style="dim")
+                        parts = []
+                        for info in v.asn_info:
+                            org = f" ({info['asn_org']})" if info.get('asn_org') else ""
+                            city = f" - {info['city']}" if info.get('city') else ""
+                            lat = info.get('latitude')
+                            lon = info.get('longitude')
+                            coord = f" ({lat:.2f},{lon:.2f})" if lat and lon else ""
+                            parts.append(f"AS{info['asn']}{org} [{info['country']}{city}{coord}]")
+                        asn_line.append(", ".join(parts), style="cyan")
+                        console.print(asn_line)
 
         console.print()
         console.print(Rule(style="dim"))
@@ -363,6 +389,7 @@ class Reporter:
                         "evidence":       v.evidence,
                         "http_status":    v.http_status,
                         "origin_ips":     v.origin_ips,
+                        "asn_info":       v.asn_info,
                         "recommendation": v.recommendation,
                     }
                     for v in r.vulnerabilities

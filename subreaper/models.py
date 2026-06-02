@@ -26,6 +26,7 @@ class VulnResult:
     evidence: list = field(default_factory=list)
     http_status: Optional[int] = None
     origin_ips: list = field(default_factory=list)
+    asn_info: list = field(default_factory=list)
     recommendation: str = ""
 
     risk_score: int = 0

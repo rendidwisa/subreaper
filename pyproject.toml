@@ -17,6 +17,7 @@ dependencies = [
     "dnspython>=2.3",
     "colorama>=0.4",
     "rich>=13.0",
+    "geoip2>=4.8.0",
 ]
 keywords = ["subdomain-takeover", "security", "bugbounty", "pentest", "dns"]
 classifiers = [
