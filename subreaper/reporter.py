@@ -35,7 +35,7 @@ BANNER = """\
   ███████║╚██████╔╝██████╔╝██║  ██║███████╗██║  ██║██║     ███████╗██║  ██║
   ╚══════╝ ╚═════╝ ╚═════╝ ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝     ╚══════╝╚═╝  ╚═╝
 [/red bold]
-[yellow]  [ Subdomain Takeover & DNS Vulnerability Scanner — v1.1.1 ][/yellow]
+[yellow]  [ Subdomain Takeover & DNS Vulnerability Scanner — v1.1.2 ][/yellow]
 [cyan]  [ Pentest & Bug Bounty — By @rendidwisa ][/cyan]
 """
 

@@ -127,3 +127,82 @@ def lookup(ip: str) -> Optional[dict]:
             return result
     # Fallback
     return _lookup_dns(ip)
+
+
+def download_geoip_databases(license_key: str, db_dir: str = None) -> bool:
+    """
+    Download GeoLite2-ASN and GeoLite2-City databases from MaxMind.
+
+    Args:
+        license_key: MaxMind license key (free account required).
+        db_dir: Directory to save the .mmdb files. Defaults to subreaper/data/.
+
+    Returns:
+        True if both files were downloaded successfully, False otherwise.
+    """
+    if not db_dir:
+        db_dir = os.path.join(os.path.dirname(__file__), "..", "data")
+    os.makedirs(db_dir, exist_ok=True)
+
+    asn_path = os.path.join(db_dir, "GeoLite2-ASN.mmdb")
+    city_path = os.path.join(db_dir, "GeoLite2-City.mmdb")
+
+    base_url = "https://download.maxmind.com/app/geoip_download"
+    params = {
+        "license_key": license_key,
+        "suffix": "tar.gz",
+    }
+
+    try:
+        import requests
+    except ImportError:
+        print("Error: 'requests' library is required for download. Install with: pip install requests")
+        return False
+
+    success = True
+
+    print("Downloading GeoLite2-ASN...")
+    try:
+        resp = requests.get(
+            f"{base_url}?edition_id=GeoLite2-ASN&license_key={license_key}&suffix=tar.gz",
+            stream=True,
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            with open(asn_path, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            size_mb = os.path.getsize(asn_path) / (1024 * 1024)
+            print(f"  Done ({size_mb:.1f} MB)")
+        else:
+            print(f"  Failed (HTTP {resp.status_code})")
+            success = False
+    except Exception as e:
+        print(f"  Error: {e}")
+        success = False
+
+    print("Downloading GeoLite2-City...")
+    try:
+        resp = requests.get(
+            f"{base_url}?edition_id=GeoLite2-City&license_key={license_key}&suffix=tar.gz",
+            stream=True,
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            with open(city_path, "wb") as f:
+                for chunk in resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            size_mb = os.path.getsize(city_path) / (1024 * 1024)
+            print(f"  Done ({size_mb:.1f} MB)")
+        else:
+            print(f"  Failed (HTTP {resp.status_code})")
+            success = False
+    except Exception as e:
+        print(f"  Error: {e}")
+        success = False
+
+    if success:
+        print("\nGeoIP databases installed successfully.")
+    else:
+        print("\nSome downloads failed. Check your license key and internet connection.")
+    return success

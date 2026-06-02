@@ -32,7 +32,7 @@ console = Console()
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="subreaper",
-        description="SubReaper v1.1 — Subdomain Takeover & Vulnerability Scanner",
+        description="SubReaper v1.1.2 — Subdomain Takeover & Vulnerability Scanner",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 examples:
@@ -80,7 +80,11 @@ examples:
         action="store_true",
         help="Show status for every domain, including clean / NXDOMAIN",
     )
-
+    parser.add_argument(
+        "-S", "--setup-geoip",
+        action="store_true",
+        help="Download MaxMind GeoLite2 databases for enhanced IP intelligence",
+    )
     return parser
 
 
@@ -136,7 +140,27 @@ async def async_main() -> None:
     parser = build_parser()
     args   = parser.parse_args()
 
-    if not args.domain and not args.file:
+    if args.setup_geoip:
+        console.print("[bold cyan]SubReaper GeoIP Database Setup[/bold cyan]\n")
+        console.print(
+            "This wizard downloads the free MaxMind GeoLite2 databases.\n"
+            "You need a license key from https://www.maxmind.com/en/geolite2/signup\n"
+            "After logging in, get your key at https://www.maxmind.com/en/accounts/current/license-key\n"
+        )
+        license_key = console.input("[bold]Enter your license key (leave empty to cancel): [/bold]")
+        if not license_key.strip():
+            console.print("\n[yellow]No license key provided. Operation cancelled.[/yellow]")
+            sys.exit(0)
+
+        from subreaper.core.ip_intel import download_geoip_databases
+        success = download_geoip_databases(license_key.strip())
+        if success:
+            console.print("\n[green]Setup complete. SubReaper will now use GeoIP databases.[/green]")
+        else:
+            console.print("\n[red]Download failed. SubReaper will continue using DNS fallback.[/red]")
+        sys.exit(0)
+
+    if not args.setup_geoip and not args.domain and not args.file:
         parser.print_help()
         console.print(
             "\n  [bold red]Error:[/bold red] must specify either -d <domain> or -f <file>"
