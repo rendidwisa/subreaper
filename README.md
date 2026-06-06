@@ -69,6 +69,32 @@ subreaper -f subs.txt -v
 subreaper -f subs.txt -c 30 -t 15
 ```
 
+### Advanced Features
+
+### Ghost Service Detection (-g)
+
+Ghost services are CNAME targets that still exist but display a generic error page indicating the resource is missing (e.g., Heroku "No such app"). They are often missed by simple DNS checks because the domain resolves successfully.
+
+```bash
+subreaper -f subs.txt -g
+```
+
+### WAF Bypass Surface (-i)
+
+Many domains sit behind a CDN / WAF. SubReaper tries to find the origin IP that serves the application directly. It identifies the WAF provider (Cloudflare, CloudFront, Fastly, etc.), collects all IPs, filters out those belonging to the WAF, and presents candidate origin IPs.
+
+```bash
+subreaper -f subs.txt -i
+```
+
+### Origin Validation (-Vo)
+
+To reduce false positives, add -Vo to perform direct HTTP requests to each candidate IP with the original Host header. Only IPs that respond with the actual content (and no CDN signals) will be flagged as BYPASSABLE. Without validation, IPs that are still behind the CDN (e.g., returning "CloudFront" in the body) may appear as candidates.
+
+```bash
+subreaper -f subs.txt -i -Vo
+```
+
 ### Pipe from another tool (e.g., subfinder)
 
 ```bash
@@ -102,6 +128,15 @@ subreaper -S
 ```
 ---
 
+### Update WAF IP Ranges (-U)
+
+CDN providers frequently change their IP ranges. Run -U periodically to download the latest IP prefixes from official sources (CloudFront, Cloudflare, Fastly). The updated data is stored in ~/.subreaper/waf_ranges.json and used automatically on subsequent scans.
+
+```bash
+subreaper -U
+```
+You can also run it before a scan session to ensure the most accurate results.
+
 ## Full Options
 
 | Option             | Short | Description                                                     |
@@ -117,6 +152,7 @@ subreaper -S
 | `--ghost`          | `-g`  | Detect ghost services = live CNAME targets with foreign content |
 | `--origin`         | `-i`  | Detect WAF bypass via exposed original IPs                      |
 | `--validate-origin`| `-Vo` | Validate potential origin IPs with direct HTTP probes           |
+| `--update-waf-db`  | `-U`  | Download latest WAF/CDN IP ranges from official sources         |
 
 ---
 
