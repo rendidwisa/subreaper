@@ -72,7 +72,7 @@ subreaper -f subs.txt -c 30 -t 15
 ### Pipe from another tool (e.g., subfinder)
 
 ```bash
-subfinder -d target.com -silent | subreaper -f /dev/stdin
+subfinder -d target.com -silent | subreaper -f /dev/stdin -i -g -o result.json
 ```
 
 ### IP Intelligence (ASN & GeoIP)
@@ -104,16 +104,19 @@ subreaper -S
 
 ## Full Options
 
-| Option          | Short | Description                                                |
-| --------------- | ----- | ---------------------------------------------------------- |
-| `--domain`      | `-d`  | Single domain/subdomain to scan                            |
-| `--file`        | `-f`  | File with one domain per line (use `/dev/stdin` for pipes) |
-| `--output`      | `-o`  | Save results to a JSON file                                |
-| `--concurrency` | `-c`  | Number of parallel workers (default: 20)                   |
-| `--timeout`     | `-t`  | DNS & HTTP timeout in seconds (default: 10)                |
-| `--nameservers` | `-n`  | Comma-separated custom DNS servers                         |
-| `--verbose`     | `-v`  | Show every domain status (including CLEAN/NXDOMAIN)        |
-| `--setup-geoip` | `-S`  | Download MaxMind GeoLite2 databases for enhanced IP        |
+| Option             | Short | Description                                                     |
+| ------------------ | ----- | ----------------------------------------------------------------|
+| `--domain`         | `-d`  | Single domain/subdomain to scan                                 |
+| `--file`           | `-f`  | File with one domain per line (use `/dev/stdin` for pipes)      |
+| `--output`         | `-o`  | Save results to a JSON file                                     |
+| `--concurrency`    | `-c`  | Number of parallel workers (default: 20)                        |
+| `--timeout`        | `-t`  | DNS & HTTP timeout in seconds (default: 10)                     |
+| `--nameservers`    | `-n`  | Comma-separated custom DNS servers                              |
+| `--verbose`        | `-v`  | Show every domain status (including CLEAN/NXDOMAIN)             |
+| `--setup-geoip`    | `-S`  | Download MaxMind GeoLite2 databases for enhanced IP             |
+| `--ghost`          | `-g`  | Detect ghost services = live CNAME targets with foreign content |
+| `--origin`         | `-i`  | Detect WAF bypass via exposed original IPs                      |
+| `--validate-origin`| `-Vo` | Validate potential origin IPs with direct HTTP probes           |
 
 ---
 
