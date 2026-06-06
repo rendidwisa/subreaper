@@ -69,7 +69,7 @@ subreaper -f subs.txt -v
 subreaper -f subs.txt -c 30 -t 15
 ```
 
-### Advanced Features
+## Advanced Features
 
 ### Ghost Service Detection (-g)
 
@@ -100,6 +100,8 @@ subreaper -f subs.txt -i -Vo
 ```bash
 subfinder -d target.com -silent | subreaper -f /dev/stdin -i -g -o result.json
 ```
+
+## Update data
 
 ### IP Intelligence (ASN & GeoIP)
 
