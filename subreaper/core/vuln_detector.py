@@ -15,8 +15,10 @@ import dns.resolver
 from subreaper.core.dns_analyzer import DNSAnalyzer
 from subreaper.core.http_prober import HTTPProber
 from subreaper.data.fingerprints import TAKEOVER_FINGERPRINTS, STRENGTH_SCORE
-from subreaper.models import DNSInfo, VulnResult
+from subreaper.models import DNSInfo, VulnResult, GhostIP, GhostService
 from subreaper.core.ip_intel import lookup as ip_lookup
+from subreaper.core.origin_detector import OriginDetector
+from subreaper.core.ghost_service_detector import GhostServiceDetector
 
 # ── Thresholds ────────────────────────────────────────────────────────────────
 
@@ -108,6 +110,8 @@ class VulnDetector:
     def __init__(self, dns_analyzer: DNSAnalyzer, http_prober: HTTPProber):
         self.dns  = dns_analyzer
         self.http = http_prober
+        self.origin = OriginDetector()
+        self.ghost = GhostServiceDetector(http_prober)
 
     # ── Public entrypoint ─────────────────────────────────────────────────────
 
@@ -215,6 +219,21 @@ class VulnDetector:
 
         return findings
 
+    async def check_origin_exposure(
+        self,
+        domain:   str,
+        dns_info: DNSInfo,
+        validate: bool = False,
+    ) -> tuple[list[str], list, bool]:
+        return await self.origin.detect(domain, dns_info, validate=validate)
+
+    async def check_ghost_service(
+        self,
+        domain:   str,
+        dns_info: DNSInfo,
+    ) -> list[GhostService]:
+        return await self.ghost.detect(domain, dns_info)
+
     async def _resolve_a(self, domain: str) -> list[str]:
         try:
             answers = dns.resolver.resolve(domain, 'A')
@@ -264,13 +283,10 @@ class VulnDetector:
             visited.add(src)
 
             if hop.get("dangling"):
-                # src has a valid CNAME record pointing to dst,
-                # but dst does not resolve — that is the dangling target.
-                # This is true even when src is the very first hop,
-                # i.e. a single-hop dangling CNAME.
                 is_dangling   = True
                 dangling_from = src
-                # Use dst for provider matching so fingerprints can still fire
+                if not first_provider_match and self._match_provider(dst):
+                    first_provider_match = dst
                 if not last_valid:
                     last_valid = dst
                 break
@@ -278,6 +294,7 @@ class VulnDetector:
             last_valid = dst
             if not first_provider_match and self._match_provider(dst):
                 first_provider_match = dst
+
         final_target = first_provider_match if first_provider_match else last_valid
         return final_target, is_dangling, dangling_from
 
@@ -387,16 +404,6 @@ class VulnDetector:
         result.status_matches_provider = result.status in provider.get("http_codes", [])
         return result
 
-    # ── A record resolution ───────────────────────────────────────────────────
-
-    async def _resolve_a(self, domain: str) -> list[str]:
-        """Resolve A records for the given domain, return sorted IP list."""
-        try:
-            answers = dns.resolver.resolve(domain, 'A')
-            return sorted({r.to_text() for r in answers})
-        except Exception:
-            return []
-
     # ── TLS info ──────────────────────────────────────────────────────────────
 
     async def _collect_tls(self, domain: str) -> _TLSInfo:
@@ -430,6 +437,7 @@ class VulnDetector:
         return tls
 
     # ── Scoring ───────────────────────────────────────────────────────────────
+
     def _score(self, state: _State) -> None:
         score = 0
 
@@ -441,19 +449,17 @@ class VulnDetector:
         ):
             score += 30
         elif (
-            # Scenario B: CNAME to an active provider but the body fingerprint matches
-            # The server is still alive but the account may have become orphaned/claimable
             state.consensus
             and state.consensus.valid_votes >= NXDOMAIN_CONSENSUS_THRESHOLD
             and state.http
-            and state.http.status in (403, 404, 409)
+            and state.http.body_match                              # ← tambahkan ini
+            and state.http.fingerprint_strength >= STRENGTH_SCORE["MEDIUM"]
             and not state.http.negative_signal
             and state.provider.get("claimable")
-            #and state.http.fingerprint_strength >= STRENGTH_SCORE["MEDIUM"]
         ):
-            score += 25 + (10 if state.provider.get("claimable") else 0) # lower than NXDOMAIN because less certain
+            score += 20
 
-        score += 20  # known provider match
+        score += 25
 
         http = state.http
         if http:
@@ -485,7 +491,7 @@ class VulnDetector:
             and state.consensus.valid_votes >= NXDOMAIN_CONSENSUS_THRESHOLD
             and state.http
             and state.http.body_match
-            and not state.provider.get("claimable", False)  
+            and state.provider.get("claimable", False)  
         )
         if state.is_dangling:
             vuln_type = "DANGLING_CNAME"

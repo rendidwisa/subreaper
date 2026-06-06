@@ -3,6 +3,40 @@ from typing import Optional
 
 
 @dataclass
+class IpPath:
+    source:   str      
+    via:      str
+    ip:       str
+    label:    str
+    is_range: bool = False
+
+
+@dataclass
+class GhostIP:
+    ip:            str
+    via_subdomain: str
+    source:        str        
+    status:        str           
+    http_status:   int   = 0
+    body_preview:  str   = ""
+    priority:      int   = 0
+    has_admin_panel:  bool = False
+    has_default_page: bool = False
+    has_error_page:   bool = False
+
+
+@dataclass
+class GhostService:
+    domain:         str
+    cname_target:   str
+    provider:       str
+    http_status:    int
+    severity:       int
+    evidence:       list = field(default_factory=list)
+    recommendation: str  = ""
+
+
+@dataclass
 class DNSInfo:
     a_records: list = field(default_factory=list)
     aaaa_records: list = field(default_factory=list)
@@ -45,3 +79,5 @@ class ScanResult:
     vulnerabilities: list = field(default_factory=list)
     status: str = "CLEAN"
     scan_time_ms: float = 0.0
+    origin_result: Optional[tuple] = None
+    ghost_services: list = field(default_factory=list)

@@ -21,7 +21,7 @@ from rich.table import Table
 from rich.text import Text
 from rich import box
 
-from subreaper.models import ScanResult, VulnResult
+from subreaper.models import ScanResult, VulnResult, GhostService
 
 
 console = Console()
@@ -275,10 +275,82 @@ class Reporter:
             console.print(Rule(style="red dim"))
             console.print()
 
+
+    @staticmethod
+    def print_origin_result(domain: str, result: tuple) -> None:
+        waf_detected, origin_ips, bypassable = result
+        if not waf_detected:
+            return
+
+        console.print()
+        console.print(Rule(
+            title="[on dark_orange][white] ⚠ WAF BYPASS SURFACE [/white][/on dark_orange]",
+            style="orange1 dim",
+        ))
+
+        t = Table(box=None, show_header=False, padding=(0, 1), min_width=60)
+        t.add_column(style="dim",   no_wrap=True, min_width=14)
+        t.add_column(style="white", overflow="fold")
+
+        t.add_row("Domain",       Text(domain, style="cyan"))
+        t.add_row("WAF Detected", Text(", ".join(waf_detected), style="magenta"))
+
+        if origin_ips:
+            ip_text = Text()
+            for path in origin_ips:
+                ip_text.append(f"{path.ip}", style="cyan")
+                ip_text.append(f"  via {path.via}  [{path.source}]\n", style="dim")
+            t.add_row("Origin IPs", ip_text)
+
+        t.add_row(
+            "Bypassable",
+            Text("YES — origin exposed", style="red bold") if bypassable
+            else Text("NO",              style="green"),
+        )
+
+        console.print(t)
+        console.print(Rule(style="orange1 dim"))
+        console.print()
+
+    @staticmethod
+    def print_ghost_services(domain: str, services: list) -> None:
+        if not services:
+            return
+
+        for gs in services:
+            console.print()
+            console.print(Rule(
+                title="[on purple][white] ⚠ GHOST SERVICE DETECTED [/white][/on purple]",
+                style="purple dim",
+            ))
+
+            t = Table(box=None, show_header=False, padding=(0, 1), min_width=60)
+            t.add_column(style="dim",   no_wrap=True, min_width=14)
+            t.add_column(style="white", overflow="fold")
+
+            t.add_row("Domain",       Text(gs.domain,       style="cyan"))
+            t.add_row("CNAME Target", Text(gs.cname_target, style="yellow"))
+            t.add_row("Provider",     Text(gs.provider,     style="magenta"))
+            t.add_row("HTTP Status",  Text(str(gs.http_status), style="red"))
+            t.add_row("Severity",     Text(f"{gs.severity}/100",
+                style="red bold" if gs.severity >= 80 else "yellow bold"))
+
+            if gs.evidence:
+                ev_text = Text()
+                for ev in gs.evidence:
+                    ev_text.append(f"  • {ev}\n", style="dim")
+                t.add_row("Evidence", ev_text)
+
+            t.add_row("Fix", Text(gs.recommendation, style="green"))
+
+            console.print(t)
+            console.print(Rule(style="purple dim"))
+            console.print()
+
     # ── scan summary ──────────────────────────────────────────────────────────
 
     @staticmethod
-    def print_summary(results: list[ScanResult], elapsed: float) -> None:
+    def print_summary(results: list[ScanResult], elapsed: float, verbose: bool = False) -> None:
         vulns = [r for r in results if r.status == "VULNERABLE"]
         clean = [r for r in results if r.status == "CLEAN"]
         nxd   = [r for r in results if r.status == "NXDOMAIN"]
@@ -295,7 +367,17 @@ class Reporter:
         stats.add_row("Vulnerable",     Text(str(len(vulns)),   style="red bold"))
         stats.add_row("Clean",          Text(str(len(clean)),   style="green bold"))
         stats.add_row("NXDOMAIN",       Text(str(len(nxd)),     style="yellow bold"))
-
+        # --- NEW: Ghost & WAF counters in stats table ---
+        ghost_count = sum(len(getattr(r, "ghost_services", []) or []) for r in results)
+        waf_count   = sum(
+            1 for r in results
+            if getattr(r, "origin_result", None) and r.origin_result[0]
+        )
+        if ghost_count:
+            stats.add_row("Ghost Services", Text(str(ghost_count), style="purple bold"))
+        if waf_count:
+            stats.add_row("WAF Exposed",    Text(str(waf_count),   style="orange1 bold"))
+        # -------------------------------------------------
         console.print(stats)
 
         # Vulnerable domain list
@@ -333,6 +415,92 @@ class Reporter:
                             parts.append(f"AS{info['asn']}{org} [{info['country']}{city}{coord}]")
                         asn_line.append(", ".join(parts), style="cyan")
                         console.print(asn_line)
+
+        # ghost services list
+        ghost_results = [
+            (r, getattr(r, "ghost_services", []) or [])
+            for r in results
+            if getattr(r, "ghost_services", None)
+        ]
+        if ghost_results:
+            console.print()
+            console.print("  [purple bold]GHOST SERVICES DETECTED:[/purple bold]")
+            for r, services in ghost_results:
+                for gs in services:
+                    sev_style = "red bold" if gs.severity >= 80 else "yellow bold"
+                    line = Text("    ◆ ", style="purple")
+                    line.append(getattr(gs, "domain", r.domain), style="white")
+                    line.append(" → ", style="dim")
+                    line.append(gs.provider, style="magenta")
+                    line.append(f"  severity {gs.severity}/100  ", style=sev_style)
+                    line.append(f"HTTP {gs.http_status}", style="dim")
+                    console.print(line)
+                    # CNAME target
+                    cname_line = Text("       CNAME: ", style="dim")
+                    cname_line.append(gs.cname_target, style="yellow")
+                    console.print(cname_line)
+                    # Fingerprint match
+                    for ev in (gs.evidence or []):
+                        if ev.startswith("PROVIDER_FP_MATCH:"):
+                            fp_line = Text("       Match: ", style="dim")
+                            fp_line.append(ev.replace("PROVIDER_FP_MATCH:", ""), style="red dim")
+                            console.print(fp_line)
+                            break
+
+        # waf bypass surface list
+        waf_results = [
+            r for r in results
+            if getattr(r, "origin_result", None) and r.origin_result[0]
+        ]
+        if waf_results:
+            console.print()
+            console.print("  [orange1 bold]WAF BYPASS SURFACE:[/orange1 bold]")
+            for r in waf_results:
+                waf_detected, origin_ips, bypassable = r.origin_result
+                line = Text("    ◆ ", style="orange1")
+                line.append(r.domain, style="white")
+                line.append(" → ", style="dim")
+                line.append(", ".join(waf_detected), style="magenta")
+                line.append(
+                    "  BYPASSABLE" if bypassable else "  protected",
+                    style="red bold" if bypassable else "green",
+                )
+                console.print(line)
+                if origin_ips:
+                    unique_ips = list(dict.fromkeys(p.ip for p in origin_ips))
+                    total_unique = len(unique_ips)
+                    displayed = unique_ips[:6]
+                    ip_list_str = ", ".join(displayed)
+
+                    ip_line = Text("       IPs: ", style="dim")
+                    ip_line.append(f"{total_unique} unique - ", style="cyan")
+                    ip_line.append(ip_list_str, style="cyan")
+                    if total_unique > 6:
+                        ip_line.append(f"  ... +{total_unique - 6} more", style="dim cyan")
+                    console.print(ip_line)
+        # clean 
+        if verbose:
+            if clean:
+                console.print()
+                console.print("  [green bold]DOMAIN CLEAN:[/green bold]")
+                for r in clean:
+                    line = Text("    ◆ ", style="green")
+                    line.append(r.domain, style="white")
+                    if r.dns and r.dns.cname_chain:
+                        last = r.dns.cname_chain[-1].get("to", "")
+                        if last:
+                            line.append(f"  → {last}", style="dim")
+                    if r.dns and r.dns.a_records:
+                        line.append(f"  [{', '.join(r.dns.a_records[:2])}]", style="dim cyan")
+                    console.print(line)
+
+            if nxd:
+                console.print()
+                console.print("  [yellow bold]DOMAIN NXDOMAIN:[/yellow bold]")
+                for r in nxd:
+                    line = Text("    ◆ ", style="yellow")
+                    line.append(r.domain, style="dim")
+                    console.print(line)
 
         console.print()
         console.print(Rule(style="dim"))
@@ -394,6 +562,28 @@ class Reporter:
                     }
                     for v in r.vulnerabilities
                 ],
+                "origin_result": (
+                    {
+                        "waf_detected":  r.origin_result[0],
+                        "origin_ips":    [
+                            {"ip": p.ip, "via": p.via, "source": p.source, "label": p.label}
+                            for p in r.origin_result[1]
+                        ],
+                        "bypassable":    r.origin_result[2],
+                    }
+                    if getattr(r, "origin_result", None) else None
+                ),
+                "ghost_services": [
+                    {
+                        "cname_target":   gs.cname_target,
+                        "provider":       gs.provider,
+                        "http_status":    gs.http_status,
+                        "severity":       gs.severity,
+                        "evidence":       gs.evidence,
+                        "recommendation": gs.recommendation,
+                    }
+                    for gs in getattr(r, "ghost_services", [])
+                ], 
             })
 
         with open(path, "w") as fh:

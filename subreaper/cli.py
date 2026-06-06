@@ -40,6 +40,7 @@ examples:
   subreaper -f subdomains.txt -o results.json -v
   subreaper -f subs.txt -c 50 -t 15
   subfinder -d target.com -silent | subreaper -f /dev/stdin
+  subreaper -d vulnerable.com -i -g
         """,
     )
 
@@ -79,6 +80,21 @@ examples:
         "-v", "--verbose",
         action="store_true",
         help="Show status for every domain, including clean / NXDOMAIN",
+    )
+    parser.add_argument(
+        "-i", "--origin",
+        action="store_true",
+        help="Detect WAF bypass via exposed original IPs",
+    )
+    parser.add_argument(
+        "-g", "--ghost",
+        action="store_true",
+        help="Detect ghost services = live CNAME targets with foreign content",
+    )
+    parser.add_argument(
+        "-Vo", "--validate-origins",
+        action="store_true",
+        help="Validate potential origin IPs with direct HTTP probes (improves accuracy but adds overhead)",
     )
     parser.add_argument(
         "-S", "--setup-geoip",
@@ -124,7 +140,10 @@ def _print_header(domains: list[str], args: argparse.Namespace) -> None:
     tbl.add_row("Timeout",     f"{args.timeout}s")
     tbl.add_row("Nameservers", ns_display)
     tbl.add_row("Started at",  datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-
+    if args.origin:
+        tbl.add_row("Origin Check",  "[green]enabled[/green]")
+    if args.ghost:
+        tbl.add_row("Ghost Service", "[green]enabled[/green]")
     console.print(tbl)
     console.print(Rule(style="dim"))
     console.print()
@@ -183,6 +202,9 @@ async def async_main() -> None:
         timeout=args.timeout,
         nameservers=nameservers,
         verbose=args.verbose,
+        check_origin=args.origin,
+        check_ghost_services=args.ghost,
+        validate_origins=args.validate_origins,
     )
 
     start_total = time.time()

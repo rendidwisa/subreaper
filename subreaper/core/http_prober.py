@@ -100,16 +100,20 @@ class HTTPProber:
         domain: str,
         custom_host: Optional[str] = None,
         use_default_headers: bool = True,
+        extra_headers: Optional[dict] = None,
     ) -> dict:
         """
         Probe *domain* and return a result dict.
 
         custom_host: override the Host header.
         use_default_headers: if False, only send minimal headers (just Host if custom_host given).
+        extra_headers: additional headers to include in the request.
         """
         headers = _DEFAULT_HEADERS.copy() if use_default_headers else {}
         if custom_host:
             headers["Host"] = custom_host
+        if extra_headers:
+            headers.update(extra_headers)
 
         ssl_context = ssl_module.create_default_context()
         ssl_context.check_hostname = False

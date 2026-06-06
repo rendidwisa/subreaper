@@ -75,9 +75,15 @@ class SubReaper:
         nameservers: list = None,
         verbose: bool = False,
         reporter: Reporter = None,
+        check_origin: bool = False,
+        check_ghost_services: bool = False,
+        validate_origins: bool = False,
     ):
         self.concurrency = concurrency
         self.verbose     = verbose
+        self.check_origin        = check_origin
+        self.check_ghost_services = check_ghost_services
+        self.validate_origins     = validate_origins
         self.reporter    = reporter or Reporter()
 
         self.dns      = DNSAnalyzer(nameservers=nameservers, timeout=timeout)
@@ -125,6 +131,18 @@ class SubReaper:
             result.dns = dns_info
 
             vulns = await self.detector.check_takeover(domain, dns_info)
+            origin_result = None
+            if self.check_origin:
+                origin_result = await self.detector.check_origin_exposure(
+                    domain, dns_info, validate=self.validate_origins
+                )
+
+            ghost_services = []
+            if self.check_ghost_services:
+                ghost_services = await self.detector.check_ghost_service(domain, dns_info)
+
+            result.origin_result  = origin_result
+            result.ghost_services = ghost_services
             result.vulnerabilities = vulns
 
             elapsed             = (time.time() - start) * 1000
@@ -157,7 +175,6 @@ class SubReaper:
                         self.reporter.print_clean(result, verbose=self.verbose)
                     else:
                         self.reporter.print_status(domain, result.status)
-
             self.results.append(result)
             return result
 
@@ -179,17 +196,21 @@ class SubReaper:
                     return_exceptions=True,
                 )
                 self._live = None
-            console.print(_build_table(self._rows, self._total))
+            self.results = [r for r in raw if r and not isinstance(r, Exception)]
         else:
             raw = await asyncio.gather(
                 *[self.scan_domain(d) for d in clean],
                 return_exceptions=True,
             )
-
-        return [r for r in raw if r and not isinstance(r, Exception)]
+        # debug
+        for r in raw:
+            if isinstance(r, Exception):
+                console.print(f"[red]ERROR: {r}[/red]")
+        self.results = [r for r in raw if r and not isinstance(r, Exception)]
+        return self.results
 
     def print_summary(self, elapsed: float = 0.0) -> None:
-        self.reporter.print_summary(self.results, elapsed)
+        self.reporter.print_summary(self.results, elapsed, verbose=self.verbose)
 
     def export_json(self, output_path: str) -> None:
         self.reporter.export_json(self.results, output_path)
