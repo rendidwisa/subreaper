@@ -97,6 +97,11 @@ examples:
         help="Validate potential origin IPs with direct HTTP probes (improves accuracy but adds overhead)",
     )
     parser.add_argument(
+        "-U", "--update-waf-db",
+        action="store_true",
+        help="Download latest WAF/CDN IP ranges from official sources (CloudFront, Cloudflare, Fastly)",
+    )
+    parser.add_argument(
         "-S", "--setup-geoip",
         action="store_true",
         help="Download MaxMind GeoLite2 databases for enhanced IP intelligence",
@@ -170,7 +175,9 @@ async def async_main() -> None:
         if not license_key.strip():
             console.print("\n[yellow]No license key provided. Operation cancelled.[/yellow]")
             sys.exit(0)
-
+            from subreaper.data.waf_updater import update_cache
+            await update_cache()
+            sys.exit(0)
         from subreaper.core.ip_intel import download_geoip_databases
         success = download_geoip_databases(license_key.strip())
         if success:
@@ -178,8 +185,15 @@ async def async_main() -> None:
         else:
             console.print("\n[red]Download failed. SubReaper will continue using DNS fallback.[/red]")
         sys.exit(0)
+        
+    if args.update_waf_db:
+        console.print("[bold cyan]SubReaper WAF Database Update[/bold cyan]\n")
+        console.print("Downloading latest IP ranges from CloudFront, Cloudflare, Fastly...\n")
+        from subreaper.data.waf_updater import update_cache
+        await update_cache()
+        sys.exit(0)
 
-    if not args.setup_geoip and not args.domain and not args.file:
+    if not args.setup_geoip and not args.domain and not args.file and not args.update_waf_db:
         parser.print_help()
         console.print(
             "\n  [bold red]Error:[/bold red] must specify either -d <domain> or -f <file>"

@@ -10,7 +10,7 @@ from ipaddress import AddressValueError, ip_address, ip_network
 import dns.exception
 import dns.resolver
 
-from subreaper.data.waf_providers import CDN_PROVIDERS, CdnProvider, CDN_BODY_SIGNALS, CDN_SERVER_HEADERS
+from subreaper.data.waf_providers import CDN_PROVIDERS, CdnProvider, CDN_BODY_SIGNALS, CDN_SERVER_HEADERS, ANYCAST_BLOCKS
 from subreaper.models import IpPath
 
 
@@ -19,6 +19,8 @@ from subreaper.models import IpPath
 
 class OriginDetector:
 
+    def __init__(self) -> None:
+        self._resolve_cache: dict[str, list[str]] = {}
     # ── Public entrypoint ─────────────────────────────────────────────────────
 
     async def detect(
@@ -66,7 +68,8 @@ class OriginDetector:
         for ip in (dns_info.a_records or []):
             for name, cfg in CDN_PROVIDERS.items():
                 if name not in detected and self._in_waf_range(ip, cfg.ip_ranges):
-                    detected.append(name)
+                    if not self._is_shared_cdn_ip(ip):
+                        detected.append(name)
 
         return detected
 
@@ -81,6 +84,13 @@ class OriginDetector:
                 via=domain,
                 ip=ip,
                 label="Direct A record",
+            ))
+        for ip in (dns_info.aaaa_records or []):
+            paths.append(IpPath(
+                source="AAAA_RECORD",
+                via=domain,
+                ip=ip,
+                label="Direct AAAA record",
             ))
 
         for hop in (dns_info.cname_chain or []):
@@ -163,6 +173,8 @@ class OriginDetector:
                 continue
             if self._in_waf_range(path.ip, waf_ranges): 
                 continue
+            if self._is_anycast_ip(path.ip):
+                continue
             if path.ip in merged:
                 existing = merged[path.ip]
                 if path.source not in existing.source:
@@ -182,7 +194,10 @@ class OriginDetector:
             1 for cfg in CDN_PROVIDERS.values()
             if self._in_waf_range(ip_str, cfg.ip_ranges)
         )
-        return match_count > 1
+        return match_count > 3
+
+    def _is_anycast_ip(self, ip_str: str) -> bool:
+        return self._in_waf_range(ip_str, ANYCAST_BLOCKS)
 
     async def _validate_origin_ips(
         self,
@@ -195,12 +210,23 @@ class OriginDetector:
 
         timeout = aiohttp.ClientTimeout(total=5, connect=3)
 
-        async def _probe(path: IpPath) -> IpPath | None:
-            for scheme in ("https", "http"):
-                url = f"{scheme}://{path.ip}/"
-                try:
-                    async with aiohttp.ClientSession(timeout=timeout) as session:
-                        async with session.get(
+        baseline_body: str = ""
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as s:
+                async with s.get(f"https://{domain}/", ssl=ssl_ctx, allow_redirects=False) as r:
+                    baseline_body = (await r.content.read(65536)).decode(errors="ignore").lower()
+        except Exception:
+            pass
+            
+        async with aiohttp.ClientSession(
+            timeout=timeout,
+            connector=aiohttp.TCPConnector(ssl=ssl_ctx),
+        ) as shared_session:
+            async def _probe(path: IpPath) -> IpPath | None:
+                for scheme in ("https", "http"):
+                    url = f"{scheme}://{path.ip}/"
+                    try:
+                        async with shared_session.get(
                             url,
                             headers={"Host": domain},
                             ssl=ssl_ctx,
@@ -208,19 +234,33 @@ class OriginDetector:
                         ) as resp:
                             if resp.status >= 400:
                                 return None
+                            if resp.status in (301, 302, 307, 308):
+                                location = resp.headers.get("Location", "")
+                                if location.startswith("http") and domain not in location:
+                                    return None
                             server_header = resp.headers.get("Server", "").lower()
                             if any(sig in server_header for sig in CDN_SERVER_HEADERS):
                                 return None
                             body = (await resp.content.read(65536)).decode(errors="ignore").lower()
                             if any(sig in body for sig in CDN_BODY_SIGNALS):
                                 return None
-
+                            if baseline_body and body:
+                                common = len(set(body.split()) & set(baseline_body.split()))
+                                similarity = common / max(len(baseline_body.split()), 1)
+                                if similarity < 0.3:
+                                    return None
                             return path
-                except Exception:
-                    continue
-            return None
+                    except Exception:
+                        continue
+                return None
 
-        results = await asyncio.gather(*[_probe(p) for p in candidates])
+            semaphore = asyncio.Semaphore(5)
+            async def _rate_limited_probe(path: IpPath) -> IpPath | None:
+                async with semaphore:
+                    return await _probe(path)
+
+            results = await asyncio.gather(*[_rate_limited_probe(p) for p in candidates])
+
         return [r for r in results if r is not None]
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -228,13 +268,21 @@ class OriginDetector:
     def _matches_any(value: str, patterns: list[str]) -> bool:
         return any(re.search(pat, value, re.IGNORECASE) for pat in patterns)
 
-    @staticmethod
-    def _resolve_a(hostname: str) -> list[str]:
+    def _resolve_a(self, hostname: str) -> list[str]:
+        if hostname in self._resolve_cache:
+            return self._resolve_cache[hostname]
         try:
             answers = dns.resolver.resolve(hostname, "A")
-            return sorted({r.to_text() for r in answers})
+            result = sorted({r.to_text() for r in answers})
         except (dns.exception.DNSException, Exception):
-            return []
+            result = []
+        try:
+            answers_v6 = dns.resolver.resolve(hostname, "AAAA")
+            result += sorted({r.to_text() for r in answers_v6})
+        except (dns.exception.DNSException, Exception):
+            pass
+        self._resolve_cache[hostname] = result
+        return result
 
     @staticmethod
     def _in_waf_range(ip_str: str, ranges: list[str]) -> bool:
