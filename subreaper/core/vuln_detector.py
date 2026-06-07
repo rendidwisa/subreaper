@@ -11,10 +11,11 @@ from typing import Optional
 
 import dns.exception
 import dns.resolver
+import fnmatch
 
 from subreaper.core.dns_analyzer import DNSAnalyzer
 from subreaper.core.http_prober import HTTPProber
-from subreaper.data.fingerprints import TAKEOVER_FINGERPRINTS, STRENGTH_SCORE
+from subreaper.data.fingerprints import TAKEOVER_FINGERPRINTS, STRENGTH_SCORE, FALLBACK_PROVIDER_HINTS
 from subreaper.models import DNSInfo, VulnResult, GhostIP, GhostService
 from subreaper.core.ip_intel import lookup as ip_lookup
 from subreaper.core.origin_detector import OriginDetector
@@ -125,7 +126,7 @@ class VulnDetector:
 
         # Step 1: NS takeover — fully independent, has its own guards.
         # Must run first so its findings survive all early returns below.
-        findings.extend(self._check_ns_takeover(domain, dns_info))
+        findings.extend(await self._check_ns_takeover(domain, dns_info))
 
         # Step 2: domain does not exist — no CNAME surface to exploit.
         if dns_info.nxdomain:
@@ -304,10 +305,25 @@ class VulnDetector:
         target = cname_target.lower().rstrip(".")
         for provider in TAKEOVER_FINGERPRINTS:
             for pattern in provider.get("cname_patterns", []):
-                # Boundary-anchored: "evilgithub.io" must not match "github.io"
-                regex = rf"(?:^|\.){re.escape(pattern.lower().rstrip('.'))}$"
-                if re.search(regex, target):
-                    return provider
+                p = pattern.lower().rstrip(".")
+                if "*" in p:
+                    if fnmatch.fnmatch(target, p):
+                        return provider
+                else:
+                    regex = rf"(?:^|\.){re.escape(p)}$"
+                    if re.search(regex, target):
+                        return provider
+        parts = target.split(".")
+        for suffix, hint_name in FALLBACK_PROVIDER_HINTS.items():
+                    suffix_clean = suffix.lower().rstrip(".")
+                    regex_fallback = rf"(?:^|\.){re.escape(suffix_clean)}$"
+                    
+                    if re.search(regex_fallback, target):
+                        return {
+                            "service": f"{hint_name} (Unknown)",
+                            "http_codes": [],
+                            "response_fingerprints": [],
+                        }
         return None
 
     # ── Multi-resolver consensus ──────────────────────────────────────────────
@@ -328,9 +344,7 @@ class VulnDetector:
                 except dns.resolver.NXDOMAIN:
                     return "nxdomain"
                 except dns.resolver.NoAnswer:
-                    # Target exists but has no A record —
-                    # treat as NXDOMAIN for takeover purposes
-                    return "nxdomain"
+                    return "valid"
                 except dns.resolver.Timeout:
                     return "timeout"
                 except dns.exception.DNSException:
@@ -358,8 +372,11 @@ class VulnDetector:
             + domain
         )
         loop = asyncio.get_running_loop()
-        info = await loop.run_in_executor(None, self.dns.analyze, probe)
-        return bool(info.cname_chain or info.a_records)
+        try:
+            info = await loop.run_in_executor(None, self.dns.analyze, probe)
+            return bool(info.cname_chain or info.a_records)
+        except Exception:
+            return False
 
     # ── HTTP probe ────────────────────────────────────────────────────────────
     async def _probe_http(self, domain: str, provider: dict, state: _State = None) -> _HTTPResult:
@@ -372,7 +389,6 @@ class VulnDetector:
                 break
             await asyncio.sleep(HTTP_RETRY_DELAY)
 
-        # Fallback: gunakan custom_host = CNAME target jika probe normal gagal
         if (not raw or "error" in raw) and state and state.last_cname_target:
             raw = await self.http.probe(state.last_cname_target, use_default_headers=False)
 
@@ -555,7 +571,7 @@ class VulnDetector:
 
     # ── NS takeover ───────────────────────────────────────────────────────────
 
-    def _check_ns_takeover(
+    async def _check_ns_takeover(
         self,
         domain:   str,
         dns_info: DNSInfo,
@@ -571,12 +587,14 @@ class VulnDetector:
         if dns_info.nxdomain or not dns_info.ns_records or dns_info.cname_chain:
             return results
 
-        for ns in dns_info.ns_records:
-            ns_host = ns.rstrip(".")
+        loop = asyncio.get_running_loop()
+
+        async def _check_ns(ns_host: str) -> Optional[VulnResult]:
             try:
-                socket.gethostbyname(ns_host)
+                await loop.run_in_executor(None, socket.gethostbyname, ns_host)
+                return None
             except socket.gaierror:
-                results.append(VulnResult(
+                return VulnResult(
                     domain=domain,
                     vuln_type="NS_TAKEOVER",
                     service="DNS Nameserver",
@@ -586,6 +604,10 @@ class VulnDetector:
                     recommendation=(
                         "Replace or reclaim the affected authoritative nameserver immediately."
                     ),
-                ))
+                )
 
+        ns_results = await asyncio.gather(*[
+            _check_ns(ns.rstrip(".")) for ns in dns_info.ns_records
+        ])
+        results.extend(r for r in ns_results if r is not None)
         return results

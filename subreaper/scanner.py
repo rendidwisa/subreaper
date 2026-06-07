@@ -125,7 +125,7 @@ class SubReaper:
                 idx = len(self._rows) - 1
             self._refresh()
 
-            dns_info = await asyncio.get_event_loop().run_in_executor(
+            dns_info = await asyncio.get_running_loop().run_in_executor(
                 None, self.dns.analyze, domain
             )
             result.dns = dns_info
@@ -175,6 +175,11 @@ class SubReaper:
                         self.reporter.print_clean(result, verbose=self.verbose)
                     else:
                         self.reporter.print_status(domain, result.status)
+                if origin_result and origin_result[0]:
+                    self.reporter.print_origin_origin_result(domain, origin_result)
+                if ghost_services:
+                    self.reporter.print_ghost_services(domain, ghost_services)
+                    
             self.results.append(result)
             return result
 
@@ -203,9 +208,9 @@ class SubReaper:
                 return_exceptions=True,
             )
         # debug
-        for r in raw:
+        for domain, r in zip(clean, raw):
             if isinstance(r, Exception):
-                console.print(f"[red]ERROR: {r}[/red]")
+                console.print(f"[red]ERROR [{domain}]: {r}[/red]")
         self.results = [r for r in raw if r and not isinstance(r, Exception)]
         return self.results
 

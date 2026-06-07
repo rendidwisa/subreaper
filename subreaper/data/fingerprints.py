@@ -18,7 +18,7 @@ TAKEOVER_FINGERPRINTS = [
     # ── AWS ──────────────────────────────────────────────────────────────
     {
         "service": "AWS S3",
-        "cname_patterns": ["s3.amazonaws.com", "s3-website"],
+        "cname_patterns": ["s3.amazonaws.com", "s3-website", ".s3.amazonaws.com", ".s3-website."],
         "response_fingerprints": [
             _fp("NoSuchBucket"),
             _fp("The specified bucket does not exist"),
@@ -38,7 +38,7 @@ TAKEOVER_FINGERPRINTS = [
     },
     {
         "service": "AWS ELB",
-        "cname_patterns": ["elb.amazonaws.com"],
+        "cname_patterns": ["elb.amazonaws.com", ".elb.amazonaws.com"],
         "response_fingerprints": [
             _fp("503 Service Temporarily Unavailable", STRENGTH_WEAK, SIGNAL_AMBIGUOUS),
         ],
@@ -64,6 +64,22 @@ TAKEOVER_FINGERPRINTS = [
         "provider_group": "AWS",
         "risk_weight": 30,
         "references": "https://aws.amazon.com/cloudfront/",
+    },
+    {
+        "service": "AWS API Gateway",
+        "cname_patterns": ["execute-api.*.amazonaws.com", "execute-api"],
+        "response_fingerprints": [
+            _fp('{"message":"Forbidden"}', STRENGTH_MEDIUM, SIGNAL_AMBIGUOUS),
+            _fp('{"message":"Not Found"}', STRENGTH_MEDIUM, SIGNAL_ERROR),
+            _fp("Missing Authentication Token", STRENGTH_STRONG, SIGNAL_ORPHAN),
+        ],
+        "http_codes": [403, 404],
+        "confidence": "MEDIUM",
+        "claimable": False,
+        "provider_type": PROVIDER_TYPE_CLOUD,
+        "provider_group": "AWS",
+        "risk_weight": 25,
+        "references": "https://aws.amazon.com/api-gateway/",
     },
     # ── Azure ────────────────────────────────────────────────────────────
     {
@@ -112,6 +128,22 @@ TAKEOVER_FINGERPRINTS = [
         "provider_group": "Azure",
         "risk_weight": 30,
         "references": "https://docs.microsoft.com/azure/cdn",
+    },
+    {
+        "service": "Azure Front Door",
+        "cname_patterns": ["azurefd.net", "af.cms.azure.com"],
+        "response_fingerprints": [
+            _fp("Ref A:", STRENGTH_WEAK, SIGNAL_AMBIGUOUS),
+            _fp("Error 404 - Web app not found", STRENGTH_MEDIUM, SIGNAL_ERROR),
+            _fp("This page cannot be displayed", STRENGTH_WEAK, SIGNAL_AMBIGUOUS),
+        ],
+        "http_codes": [404, 400],
+        "confidence": "MEDIUM",
+        "claimable": False,
+        "provider_type": PROVIDER_TYPE_CDN,
+        "provider_group": "Azure",
+        "risk_weight": 25,
+        "references": "https://docs.microsoft.com/azure/frontdoor",
     },
     {
         "service": "Azure Blob Storage",
@@ -171,6 +203,22 @@ TAKEOVER_FINGERPRINTS = [
         "provider_group": "Fastly",
         "risk_weight": 85,
         "references": "https://developer.fastly.com",
+    },
+    {
+        "service": "Cloudflare",
+        "cname_patterns": ["cloudflare.net", "cdn.cloudflare.net"],
+        "response_fingerprints": [
+            _fp("error code: 1001", STRENGTH_STRONG, SIGNAL_ORPHAN),
+            _fp("DNS resolution error", STRENGTH_STRONG, SIGNAL_ORPHAN),
+            _fp("error code: 1000", STRENGTH_MEDIUM, SIGNAL_ERROR),
+        ],
+        "http_codes": [404, 530],
+        "confidence": "MEDIUM",
+        "claimable": False,
+        "provider_type": PROVIDER_TYPE_CDN,
+        "provider_group": "Cloudflare",
+        "risk_weight": 20,
+        "references": "https://cloudflare.com",
     },
     # ── SaaS ─────────────────────────────────────────────────────────────
     {
@@ -419,13 +467,60 @@ TAKEOVER_FINGERPRINTS = [
             _fp("almost there", STRENGTH_MEDIUM, SIGNAL_ORPHAN),
             _fp("this account is not active", STRENGTH_STRONG, SIGNAL_ORPHAN),
         ],
-        "http_codes": [404, 200], # Zendesk returns 200 even for closed accounts
+        "http_codes": [404, 200],
         "confidence": "HIGH",
         "claimable": True,
         "provider_type": PROVIDER_TYPE_SAAS,
         "provider_group": "Zendesk",
         "risk_weight": 75,
         "references": "https://zendesk.com",
+    },
+    # ── Google Cloud ─────────────────────────────────────────────────────
+    {
+        "service": "Google Cloud Storage",
+        "cname_patterns": ["storage.googleapis.com", "c.storage.googleapis.com"],
+        "response_fingerprints": [
+            _fp("NoSuchBucket", STRENGTH_STRONG, SIGNAL_ORPHAN),
+            _fp("The specified bucket does not exist", STRENGTH_STRONG, SIGNAL_ORPHAN),
+            _fp("BucketNotFound", STRENGTH_STRONG, SIGNAL_ORPHAN),
+        ],
+        "http_codes": [404],
+        "confidence": "HIGH",
+        "claimable": True,
+        "provider_type": PROVIDER_TYPE_CLOUD,
+        "provider_group": "Google",
+        "risk_weight": 85,
+        "references": "https://cloud.google.com/storage",
+    },
+    {
+        "service": "Google Cloud Run",
+        "cname_patterns": ["run.app", ".a.run.app"],
+        "response_fingerprints": [
+            _fp("404 Not Found", STRENGTH_WEAK, SIGNAL_AMBIGUOUS),
+            _fp("Backend Error", STRENGTH_WEAK, SIGNAL_AMBIGUOUS),
+        ],
+        "http_codes": [404],
+        "confidence": "LOW",
+        "claimable": False,
+        "provider_type": PROVIDER_TYPE_CLOUD,
+        "provider_group": "Google",
+        "risk_weight": 20,
+        "references": "https://cloud.google.com/run",
+    },
+    {
+        "service": "Firebase Hosting",
+        "cname_patterns": ["firebaseapp.com", "web.app"],
+        "response_fingerprints": [
+            _fp("The requested URL was not found on this server", STRENGTH_MEDIUM, SIGNAL_ERROR),
+            _fp("Site Not Found", STRENGTH_STRONG, SIGNAL_ORPHAN),
+        ],
+        "http_codes": [404],
+        "confidence": "HIGH",
+        "claimable": True,
+        "provider_type": PROVIDER_TYPE_SAAS,
+        "provider_group": "Google",
+        "risk_weight": 80,
+        "references": "https://firebase.google.com/docs/hosting",
     },
     # ── Cloud (Other) ────────────────────────────────────────────────────
     {
@@ -465,4 +560,15 @@ CONFIDENCE_SCORE = {
     "HIGH":   90,
     "MEDIUM": 60,
     "LOW":    30,
+}
+
+FALLBACK_PROVIDER_HINTS = {
+    "amazonaws.com": "AWS",
+    "googleapis.com": "Google Cloud",
+    "google.com": "Google Cloud",
+    "azure.com": "Azure",
+    "azurefd.net": "Azure",
+    "fastly.net": "Fastly",
+    "cloudflare.net": "Cloudflare",
+    "cloudflare.com": "Cloudflare",
 }

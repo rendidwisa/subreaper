@@ -9,8 +9,9 @@ from ipaddress import AddressValueError, ip_address, ip_network
 
 import dns.exception
 import dns.resolver
+import dns.reversename
 
-from subreaper.data.waf_providers import CDN_PROVIDERS, CdnProvider, CDN_BODY_SIGNALS, CDN_SERVER_HEADERS, ANYCAST_BLOCKS
+from subreaper.data.waf_providers import CDN_PROVIDERS, CdnProvider, CDN_BODY_SIGNALS, CDN_SERVER_HEADERS, ANYCAST_BLOCKS, PUBLIC_RESOLVERS
 from subreaper.models import IpPath
 
 
@@ -29,20 +30,14 @@ class OriginDetector:
         dns_info,
         validate: bool = False,
     ) -> tuple[list[str], list[IpPath], bool]:
-        """
-        Returns:
-            waf_detected  – provider names confirmed via NS / CNAME patterns
-            origin_ips    – IpPath entries whose IPs fall outside all WAF ranges
-            bypassable    – True when WAF is present AND origin IPs are exposed
-        """
         waf_detected = self._detect_waf(dns_info)
 
-        if not waf_detected:
+        if not waf_detected and not validate:
             return [], [], False
 
         ip_paths     = self._collect_ip_paths(domain, dns_info)
-        waf_ranges   = self._collect_waf_ranges(waf_detected)
-        origin_ips   = self._filter_origins(ip_paths, waf_ranges)
+        waf_ranges   = self._collect_waf_ranges(waf_detected) if waf_detected else []
+        origin_ips   = self._filter_origins(ip_paths, waf_ranges, dns_info, domain)
         if validate and origin_ips:
             origin_ips = await self._validate_origin_ips(origin_ips, domain)
         bypassable   = bool(origin_ips)
@@ -160,19 +155,45 @@ class OriginDetector:
         self,
         ip_paths:   list[IpPath],
         waf_ranges: list[str],
+        dns_info=None,
+        domain: str = "",
     ) -> list[IpPath]:
         merged: dict[str, IpPath] = {}
+        mx_empty = not (dns_info.mx_records if dns_info else None)
         for path in ip_paths:
-            if path.is_range:                   
-                continue
+            if path.is_range:
+                if path.source == "SPF_RECORD" and not mx_empty:
+                    continue
+                if path.source != "SPF_RECORD":
+                    continue
+                try:
+                    net = ip_network(path.ip, strict=False)
+                    if net.prefixlen not in (32, 128):
+                        continue
+                    path = IpPath(
+                        source=path.source,
+                        via=path.via,
+                        ip=str(net.network_address),
+                        label=path.label,
+                        is_range=False,
+                    )
+                except ValueError:
+                    continue
             if path.source == "NS_SERVER":     
                 continue
             if "dangling" in path.label.lower(): 
                 continue
             if self._is_shared_cdn_ip(path.ip): 
                 continue
-            if self._in_waf_range(path.ip, waf_ranges): 
-                continue
+            if self._in_waf_range(path.ip, waf_ranges):
+                if not self._ptr_matches_domain(path.ip, domain):
+                    continue
+                path = IpPath(
+                    source=path.source,
+                    via=path.via,
+                    ip=path.ip,
+                    label=f"{path.label} [PTR rescued]",
+                )
             if self._is_anycast_ip(path.ip):
                 continue
             if path.ip in merged:
@@ -198,6 +219,20 @@ class OriginDetector:
 
     def _is_anycast_ip(self, ip_str: str) -> bool:
         return self._in_waf_range(ip_str, ANYCAST_BLOCKS)
+
+    @staticmethod
+    def _ptr_matches_domain(ip_str: str, domain: str) -> bool:
+        try:
+            reversed_name = dns.reversename.from_address(ip_str)
+            answers = dns.resolver.resolve(reversed_name, "PTR", lifetime=2)
+            root = domain.lstrip("www.").lower()
+            for rdata in answers:
+                ptr = rdata.to_text().rstrip(".").lower()
+                if root in ptr:
+                    return True
+        except Exception:
+            pass
+        return False
 
     async def _validate_origin_ips(
         self,
@@ -271,16 +306,27 @@ class OriginDetector:
     def _resolve_a(self, hostname: str) -> list[str]:
         if hostname in self._resolve_cache:
             return self._resolve_cache[hostname]
-        try:
-            answers = dns.resolver.resolve(hostname, "A")
-            result = sorted({r.to_text() for r in answers})
-        except (dns.exception.DNSException, Exception):
-            result = []
-        try:
-            answers_v6 = dns.resolver.resolve(hostname, "AAAA")
-            result += sorted({r.to_text() for r in answers_v6})
-        except (dns.exception.DNSException, Exception):
-            pass
+
+        all_ips: set[str] = set()
+
+        for ns in PUBLIC_RESOLVERS:
+            try:
+                r = dns.resolver.Resolver()
+                r.nameservers = [ns]
+                r.timeout  = 2
+                r.lifetime = 2
+                for rtype in ("A", "AAAA"):
+                    try:
+                        answers = r.resolve(hostname, rtype)
+                        all_ips.update(rec.to_text() for rec in answers)
+                    except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN):
+                        pass
+                    except dns.exception.DNSException:
+                        pass
+            except Exception:
+                continue
+
+        result = sorted(all_ips)
         self._resolve_cache[hostname] = result
         return result
 

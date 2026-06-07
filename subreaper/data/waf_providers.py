@@ -361,6 +361,18 @@ CDN_PROVIDERS: dict[str, CdnProvider] = {
             "216.182.224.0/20",
         ],
     ),
+    "Vercel": CdnProvider(
+        name="Vercel",
+        ns_patterns=[],
+        cname_patterns=[r"\.vercel-dns\.com$", r"\.vercel\.app$"],
+        ip_ranges=[
+            "76.76.21.0/24", "216.198.79.0/24", "64.29.17.0/24", 
+            "76.76.21.0/24", "64.29.17.0/24", "143.13.0.0/16",
+             "155.121.0.0/16", "198.169.1.0/24", "198.169.2.0/24", 
+             "216.150.1.0/24", "216.150.16.0/24", "216.198.79.0/24", 
+             "216.230.84.0/24","216.230.86.0/24", "64.239.109.0/24"
+        ],
+    ),
 }
 CDN_BODY_SIGNALS = [name.lower() for name in CDN_PROVIDERS.keys()]
 CDN_SERVER_HEADERS = [name.lower() for name in CDN_PROVIDERS.keys()]
@@ -370,6 +382,12 @@ ANYCAST_BLOCKS: list[str] = [
     "2606:4700::/32",   
     "151.101.0.0/16",  
     "199.232.0.0/16",  
+]
+PUBLIC_RESOLVERS: list[str] = [
+    "8.8.8.8",         
+    "1.1.1.1",        
+    "9.9.9.9",        
+    "208.67.222.222",
 ]
 
 _cache_file = os.path.expanduser("~/.subreaper/waf_ranges.json")

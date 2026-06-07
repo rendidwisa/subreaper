@@ -279,8 +279,8 @@ class Reporter:
     @staticmethod
     def print_origin_result(domain: str, result: tuple) -> None:
         waf_detected, origin_ips, bypassable = result
-        if not waf_detected:
-            return
+        #if not waf_detected:
+        #    return
 
         console.print()
         console.print(Rule(
@@ -293,7 +293,8 @@ class Reporter:
         t.add_column(style="white", overflow="fold")
 
         t.add_row("Domain",       Text(domain, style="cyan"))
-        t.add_row("WAF Detected", Text(", ".join(waf_detected), style="magenta"))
+        waf_label = ", ".join(waf_detected) if waf_detected else "No WAF"
+        t.add_row("WAF Detected", Text(waf_label, style="magenta"))
 
         if origin_ips:
             ip_text = Text()
@@ -371,7 +372,7 @@ class Reporter:
         ghost_count = sum(len(getattr(r, "ghost_services", []) or []) for r in results)
         waf_count   = sum(
             1 for r in results
-            if getattr(r, "origin_result", None) and r.origin_result[0]
+            if getattr(r, "origin_result", None) and r.origin_result[0] 
         )
         if ghost_count:
             stats.add_row("Ghost Services", Text(str(ghost_count), style="purple bold"))
@@ -450,7 +451,8 @@ class Reporter:
         # waf bypass surface list
         waf_results = [
             r for r in results
-            if getattr(r, "origin_result", None) and r.origin_result[0]
+            if getattr(r, "origin_result", None) is not None
+            and (r.origin_result[0] or r.origin_result[1])
         ]
         if waf_results:
             console.print()
@@ -460,7 +462,8 @@ class Reporter:
                 line = Text("    ◆ ", style="orange1")
                 line.append(r.domain, style="white")
                 line.append(" → ", style="dim")
-                line.append(", ".join(waf_detected), style="magenta")
+                waf_label = ", ".join(waf_detected) if waf_detected else "No WAF"
+                line.append(waf_label, style="magenta")
                 line.append(
                     "  BYPASSABLE" if bypassable else "  protected",
                     style="red bold" if bypassable else "green",
