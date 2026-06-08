@@ -5,7 +5,6 @@ import json
 
 from dataclasses import dataclass, field
 
-
 @dataclass(frozen=True)
 class CdnProvider:
     name:           str
@@ -383,13 +382,6 @@ ANYCAST_BLOCKS: list[str] = [
     "151.101.0.0/16",  
     "199.232.0.0/16",  
 ]
-PUBLIC_RESOLVERS: list[str] = [
-    "8.8.8.8",         
-    "1.1.1.1",        
-    "9.9.9.9",        
-    "208.67.222.222",
-]
-
 _cache_file = os.path.expanduser("~/.subreaper/waf_ranges.json")
 try:
     if os.path.isfile(_cache_file):

@@ -20,6 +20,8 @@ from subreaper.models import DNSInfo, VulnResult, GhostIP, GhostService
 from subreaper.core.ip_intel import lookup as ip_lookup
 from subreaper.core.origin_detector import OriginDetector
 from subreaper.core.ghost_service_detector import GhostServiceDetector
+from subreaper.data.vuln_signals import NEGATIVE_BODY_SIGNALS
+from subreaper.data.resolvers import RESOLVERS
 
 # ── Thresholds ────────────────────────────────────────────────────────────────
 
@@ -32,19 +34,6 @@ HTTP_RETRY_DELAY              = 0.4
 
 SCORE_THRESHOLD_HIGH          = 80
 SCORE_THRESHOLD_MEDIUM        = 55
-
-_RESOLVERS = ["8.8.8.8", "1.1.1.1", "9.9.9.9"]
-
-_NEGATIVE_BODY_SIGNALS = [
-    "parked domain",
-    "buy this domain",
-    "sedoparking",
-    "domain for sale",
-    "default nginx",
-    "default apache",
-    "welcome to cloudflare",
-]
-
 
 # ── Internal state ────────────────────────────────────────────────────────────
 
@@ -329,7 +318,7 @@ class VulnDetector:
     # ── Multi-resolver consensus ──────────────────────────────────────────────
 
     async def _resolver_consensus(self, target: str) -> _ResolverConsensus:
-        consensus = _ResolverConsensus(total=len(_RESOLVERS))
+        consensus = _ResolverConsensus(total=len(RESOLVERS))
         loop = asyncio.get_running_loop()
 
         async def _query(ns: str) -> str:
@@ -351,7 +340,7 @@ class VulnDetector:
                     return "timeout"
             return await loop.run_in_executor(None, _resolve)
 
-        results = await asyncio.gather(*[_query(ns) for ns in _RESOLVERS])
+        results = await asyncio.gather(*[_query(ns) for ns in RESOLVERS])
 
         for r in results:
             if r == "nxdomain":
@@ -398,7 +387,7 @@ class VulnDetector:
         result.status = raw.get("status", 0)
         body = raw.get("body", "").lower()
 
-        for signal in _NEGATIVE_BODY_SIGNALS:
+        for signal in NEGATIVE_BODY_SIGNALS:
             if signal in body:
                 result.negative_signal = True
                 break

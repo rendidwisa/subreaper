@@ -11,7 +11,9 @@ import dns.exception
 import dns.resolver
 import dns.reversename
 
-from subreaper.data.waf_providers import CDN_PROVIDERS, CdnProvider, CDN_BODY_SIGNALS, CDN_SERVER_HEADERS, ANYCAST_BLOCKS, PUBLIC_RESOLVERS
+from subreaper.data.waf_providers import CDN_PROVIDERS, CdnProvider, CDN_BODY_SIGNALS, CDN_SERVER_HEADERS, ANYCAST_BLOCKS
+from subreaper.data.resolvers import PUBLIC_RESOLVERS
+from subreaper.data.private_ranges import PRIVATE_IP_RANGES
 from subreaper.models import IpPath
 
 
@@ -179,6 +181,14 @@ class OriginDetector:
                     )
                 except ValueError:
                     continue
+            if self._in_waf_range(path.ip, PRIVATE_IP_RANGES):
+                merged[path.ip] = IpPath(
+                    source="INTERNAL_IP",
+                    via=path.via,
+                    ip=path.ip,
+                    label=f"Private IP: {path.ip}",
+                )
+                continue
             if path.source == "NS_SERVER":     
                 continue
             if "dangling" in path.label.lower(): 

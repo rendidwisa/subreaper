@@ -8,6 +8,7 @@ import dns.exception
 import dns.resolver
 
 from subreaper.models import GhostIP
+from subreaper.data.ghost_ip_signals import ADMIN_SIGNALS, DEFAULT_SIGNALS, ERROR_SIGNALS
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -15,11 +16,6 @@ _TCP_TIMEOUT  = 5
 _HTTP_TIMEOUT = aiohttp.ClientTimeout(total=8)
 _MAX_CONCURRENT_DNS   = 50  
 _MAX_CONCURRENT_PROBE = 20
-
-_ADMIN_SIGNALS   = ["phpmyadmin", "jenkins", "grafana", "kibana", "portainer", "traefik"]
-_DEFAULT_SIGNALS = ["welcome to nginx", "apache2 ubuntu default page", "iis windows server"]
-_ERROR_SIGNALS   = ["404 not found", "403 forbidden", "401 unauthorized"]
-
 
 # ── Module-level async helpers (menghindari async @staticmethod) ──────────────
 
@@ -149,9 +145,9 @@ class GhostIPDetector:
         ghost.status          = "ALIVE_WITH_HTTP"
         ghost.http_status     = http_status
         ghost.body_preview    = body[:200]
-        ghost.has_admin_panel  = any(s in body_lower for s in _ADMIN_SIGNALS)
-        ghost.has_default_page = any(s in body_lower for s in _DEFAULT_SIGNALS)
-        ghost.has_error_page   = any(s in body_lower for s in _ERROR_SIGNALS)
+        ghost.has_admin_panel  = any(s in body_lower for s in ADMIN_SIGNALS)
+        ghost.has_default_page = any(s in body_lower for s in DEFAULT_SIGNALS)
+        ghost.has_error_page   = any(s in body_lower for s in ERROR_SIGNALS)
         ghost.priority        += _score(ghost)
         return ghost
 

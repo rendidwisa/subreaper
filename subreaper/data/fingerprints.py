@@ -572,3 +572,29 @@ FALLBACK_PROVIDER_HINTS = {
     "cloudflare.net": "Cloudflare",
     "cloudflare.com": "Cloudflare",
 }
+_SUPPLEMENTARY_PROVIDERS = [
+    {
+        "cname_patterns": ["googleapis.com", "appspot.com", "googleusercontent.com"],
+        "service": "Google Cloud",
+        "provider_type": "Cloud",
+        "provider_group": "GCP",
+        "claimable": False,
+        "risk_weight": 20,
+    },
+    {
+        "cname_patterns": ["firebaseapp.com", "web.app"],
+        "service": "Firebase",
+        "provider_type": "Cloud",
+        "provider_group": "GCP",
+        "claimable": False,
+        "risk_weight": 25,
+    },
+]
+
+HOP_TRUST = {
+    "SaaS":     85,
+    "CDN":      80,
+    "Cloud":    75,
+    "Unknown":  40,
+    "Dangling": 0,
+}

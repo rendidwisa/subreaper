@@ -379,6 +379,14 @@ class Reporter:
         if waf_count:
             stats.add_row("WAF Exposed",    Text(str(waf_count),   style="orange1 bold"))
         # -------------------------------------------------
+        internal_count = sum(
+            1 for r in results
+            if getattr(r, "origin_result", None) and r.origin_result[1]
+            and any(p.source == "INTERNAL_IP" for p in r.origin_result[1])
+        )
+        if internal_count:
+            stats.add_row("Internal IPs",   Text(str(internal_count), style="red bold"))
+
         console.print(stats)
 
         # Vulnerable domain list
@@ -481,6 +489,31 @@ class Reporter:
                     if total_unique > 6:
                         ip_line.append(f"  ... +{total_unique - 6} more", style="dim cyan")
                     console.print(ip_line)
+
+        internal_results = [
+            r for r in results
+            if getattr(r, "origin_result", None) and r.origin_result[1]
+        ]
+        internal_domains = []
+        for r in internal_results:
+            waf_detected, origin_ips, bypassable = r.origin_result
+            private_ips = [p for p in origin_ips if p.source == "INTERNAL_IP"]
+            if private_ips:
+                internal_domains.append((r, private_ips))
+
+        if internal_domains:
+            console.print()
+            console.print("  [red bold]INTERNAL IP EXPOSURE:[/red bold]")
+            for r, ips in internal_domains:
+                line = Text("    ◆ ", style="red")
+                line.append(r.domain, style="white")
+                line.append(" → ", style="dim")
+                line.append(f"{len(ips)} private IP(s)", style="red")
+                console.print(line)
+                ip_line = Text("       IPs: ", style="dim")
+                ip_line.append(", ".join(p.ip for p in ips), style="cyan")
+                console.print(ip_line)
+
         # clean 
         if verbose:
             if clean:

@@ -6,21 +6,12 @@ from typing import Optional
 from subreaper.data.fingerprints import TAKEOVER_FINGERPRINTS, STRENGTH_SCORE
 from subreaper.models import DNSInfo, GhostService
 
-
-# ── Constants ─────────────────────────────────────────────────────────────────
-
-_SSO_SIGNALS = [
-    "okta.com", "login.microsoftonline.com", "accounts.google.com",
-    "auth0.com", "onelogin.com", "ping identity",
-]
-
-_FOR_SALE_SIGNALS = ["buy", "domain for sale", "purchase this domain", "make an offer"]
-
-_PROBE_HEADERS = {
-    "Cache-Control": "no-cache",
-    "Pragma":        "no-cache",
-}
-
+from subreaper.data.ghost_service_signals import (
+    SSO_SIGNALS,
+    FOR_SALE_SIGNALS,
+    PROBE_HEADERS,
+    TLD_BRAND_HINTS,
+)
 
 # ── Detector ──────────────────────────────────────────────────────────────────
 
@@ -48,7 +39,7 @@ class GhostServiceDetector:
         if not provider:
             return []
 
-        raw = await self.http.probe(domain, extra_headers=_PROBE_HEADERS)
+        raw = await self.http.probe(domain, extra_headers=PROBE_HEADERS)
         if not raw or "error" in raw:
             return []
 
@@ -134,7 +125,7 @@ class GhostServiceDetector:
         if status == 404:
             return 90
         if status == 200:
-            if any(s in body_lower for s in _FOR_SALE_SIGNALS):
+            if any(s in body_lower for s in FOR_SALE_SIGNALS):
                 return 60
             return 85
         if status in (301, 302):
@@ -171,7 +162,7 @@ class GhostServiceDetector:
     @staticmethod
     def _is_sso_redirect(body: str) -> bool:
         body_lower = body.lower()
-        return any(s in body_lower for s in _SSO_SIGNALS)
+        return any(s in body_lower for s in SSO_SIGNALS)
 
     @staticmethod
     def _build_evidence(matched_patterns: list[str], body: str, domain: str) -> list[str]:

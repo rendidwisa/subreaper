@@ -14,60 +14,20 @@ from typing import Optional
 import aiohttp
 import ssl as ssl_module
 
-# ── Constants ─────────────────────────────────────────────────────────────────
-
-_PROVIDER_HEADER_PREFIXES = (
-    "x-amz-",
-    "x-azure-",
-    "x-fastly-",
-    "x-vercel-",
-    "x-github-",
-    "x-netlify-",
-    "x-powered-by",
-    "x-wp-",
-    "cf-ray",      
-    "x-cdn",
-    "x-zendesk-",
-    "x-shopify-",
-    "x-heroku-",
-    "x-served-by",
+from subreaper.data.http_signals import (
+    PROVIDER_HEADER_PREFIXES,
+    DEFAULT_HEADERS,
+    BARE_ERROR_PATTERNS,
 )
 
+# ── Constants ─────────────────────────────────────────────────────────────────
 _BODY_LIMIT = 8_000
 
 _SCHEMES = ("https", "http")
 
 _MAX_REDIRECTS = 5
 _MAX_RETRIES   = 3
-_BACKOFF_BASE  = 1.5      # seconds; attempt 0 → 0s, 1 → 1.5s, 2 → 2.25s
-
-_DEFAULT_HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",     
-    "Sec-Fetch-Mode": "navigate",   
-    "Sec-Fetch-Site": "none",       
-    "Sec-Fetch-User": "?1",         
-    "Cache-Control": "max-age=0",  
-}
-
-_BARE_ERROR_PATTERNS: tuple[re.Pattern, ...] = tuple(
-    re.compile(p, re.IGNORECASE)
-    for p in (
-        r"<title>\s*404\s*</title>",
-        r"<title>\s*not found\s*</title>",
-        r"<title>\s*error\s*</title>",
-    )
-)
-
+_BACKOFF_BASE  = 1.5  
 
 # ── HTTPProber ────────────────────────────────────────────────────────────────
 
@@ -109,7 +69,7 @@ class HTTPProber:
         use_default_headers: if False, only send minimal headers (just Host if custom_host given).
         extra_headers: additional headers to include in the request.
         """
-        headers = _DEFAULT_HEADERS.copy() if use_default_headers else {}
+        headers = DEFAULT_HEADERS.copy() if use_default_headers else {}
         if custom_host:
             headers["Host"] = custom_host
         if extra_headers:
@@ -164,7 +124,7 @@ class HTTPProber:
                     provider_headers = {
                         k: v
                         for k, v in resp_headers.items()
-                        if any(k.startswith(p) for p in _PROVIDER_HEADER_PREFIXES)
+                        if any(k.startswith(p) for p in PROVIDER_HEADER_PREFIXES)
                     }
 
                     return {
@@ -244,12 +204,12 @@ class HTTPProber:
         has_provider_headers = any(
             k.startswith(p)
             for k in headers
-            for p in _PROVIDER_HEADER_PREFIXES
+            for p in PROVIDER_HEADER_PREFIXES
         )
 
         is_bare_404 = (
             len(body) < 300
-            or any(p.search(body_short) for p in _BARE_ERROR_PATTERNS)
+            or any(p.search(body_short) for p in BARE_ERROR_PATTERNS)
         )
 
         # ── 404 LOGIC ─────────────────────────────
