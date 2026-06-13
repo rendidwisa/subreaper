@@ -12,6 +12,13 @@ class CdnProvider:
     cname_patterns: list[str] = field(default_factory=list)
     ip_ranges:      list[str] = field(default_factory=list)
 
+LEAK_HEADERS: tuple[str, ...] = (
+    "X-Forwarded-For",
+    "X-Real-IP",
+    "X-Origin-IP",
+    "X-Backend-IP",
+    "X-Upstream-Addr",
+)
 
 CDN_PROVIDERS: dict[str, CdnProvider] = {
     "Cloudflare": CdnProvider(
@@ -375,6 +382,22 @@ CDN_PROVIDERS: dict[str, CdnProvider] = {
 }
 CDN_BODY_SIGNALS = [name.lower() for name in CDN_PROVIDERS.keys()]
 CDN_SERVER_HEADERS = [name.lower() for name in CDN_PROVIDERS.keys()]
+CDN_HEADERS_SIGNALS: frozenset[str] = frozenset({
+    sig.lower()
+    for provider in CDN_PROVIDERS.values()
+    for sig in [provider.name.lower()]
+} | {
+    "varnish", "squid", "cache", "cdn", "nginx-cache",
+})
+
+CDN_PRESENCE_HEADERS: tuple[str, ...] = (
+    "CF-Ray",
+    "X-Amz-Cf-Id",
+    "X-Akamai-Edgescape",
+    "Fastly-Debug-Digest",
+    "X-Cache-Hits",
+    "X-Served-By",
+)
 ANYCAST_BLOCKS: list[str] = [
     "104.16.0.0/12",   
     "172.64.0.0/13",  
