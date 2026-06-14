@@ -6,12 +6,13 @@ import aiohttp
 import ssl as ssl_module
 from dataclasses import dataclass, field
 from ipaddress import AddressValueError, ip_address, ip_network
+import difflib
 
 import dns.exception
 import dns.resolver
 import dns.reversename
 
-from subreaper.data.waf_providers import CDN_PROVIDERS, CdnProvider, CDN_BODY_SIGNALS, CDN_SERVER_HEADERS, ANYCAST_BLOCKS
+from subreaper.data.waf_providers import CDN_PROVIDERS, CdnProvider, CDN_BODY_SIGNALS, CDN_SERVER_HEADERS, ANYCAST_BLOCKS, LEAK_HEADERS
 from subreaper.data.resolvers import PUBLIC_RESOLVERS
 from subreaper.data.private_ranges import PRIVATE_IP_RANGES
 from subreaper.models import IpPath
@@ -40,7 +41,7 @@ class OriginDetector:
         ip_paths     = self._collect_ip_paths(domain, dns_info)
         waf_ranges   = self._collect_waf_ranges(waf_detected) if waf_detected else []
         origin_ips   = self._filter_origins(ip_paths, waf_ranges, dns_info, domain)
-        if validate and origin_ips:
+        if validate and origin_ips and waf_detected:
             origin_ips = await self._validate_origin_ips(origin_ips, domain)
         bypassable   = bool(origin_ips)
 
@@ -193,8 +194,6 @@ class OriginDetector:
                 continue
             if "dangling" in path.label.lower(): 
                 continue
-            if self._is_shared_cdn_ip(path.ip): 
-                continue
             if self._in_waf_range(path.ip, waf_ranges):
                 if not self._ptr_matches_domain(path.ip, domain):
                     continue
@@ -204,6 +203,8 @@ class OriginDetector:
                     ip=path.ip,
                     label=f"{path.label} [PTR rescued]",
                 )
+            elif self._is_shared_cdn_ip(path.ip):
+                continue
             if self._is_anycast_ip(path.ip):
                 continue
             if path.ip in merged:
@@ -244,6 +245,37 @@ class OriginDetector:
             pass
         return False
 
+    @staticmethod
+    async def _cert_covers_domain(ip: str, domain: str, port: int = 443) -> bool:
+        import ssl as _ssl
+        ctx = _ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = _ssl.CERT_NONE
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(ip, port, ssl=ctx), timeout=3
+            )
+            cert = writer.get_extra_info("ssl_object").getpeercert(binary_form=False)
+            writer.close()
+            await writer.wait_closed()
+            if not cert:
+                return False
+            sans = [v for t, v in cert.get("subjectAltName", []) if t == "DNS"]
+            if not sans:
+                cn_tuples = cert.get("subject", [])
+                for entry in cn_tuples:
+                    for k, v in entry:
+                        if k == "commonName":
+                            sans.append(v)
+            root = domain.lstrip("www.").lower()
+            for san in sans:
+                san = san.lower().lstrip("*.")
+                if san == root or root.endswith("." + san):
+                    return True
+        except Exception:
+            pass
+        return False
+
     async def _validate_origin_ips(
         self,
         candidates: list[IpPath],
@@ -256,28 +288,46 @@ class OriginDetector:
         timeout = aiohttp.ClientTimeout(total=5, connect=3)
 
         baseline_body: str = ""
-        try:
-            async with aiohttp.ClientSession(timeout=timeout) as s:
-                async with s.get(f"https://{domain}/", ssl=ssl_ctx, allow_redirects=False) as r:
-                    baseline_body = (await r.content.read(65536)).decode(errors="ignore").lower()
-        except Exception:
-            pass
+        async with aiohttp.ClientSession(timeout=timeout) as s:
+            for path_try in ("/robots.txt", "/favicon.ico", "/"):
+                try:
+                    async with s.get(f"https://{domain}{path_try}", ssl=ssl_ctx, allow_redirects=False) as r:
+                        raw = (await r.content.read(65536)).decode(errors="ignore")
+                        if raw.strip():
+                            baseline_body = OriginDetector._strip_html(raw)
+                            break
+                except Exception:
+                    continue
             
         async with aiohttp.ClientSession(
             timeout=timeout,
             connector=aiohttp.TCPConnector(ssl=ssl_ctx),
         ) as shared_session:
+            leaked_ips: set[str] = set()
+
             async def _probe(path: IpPath) -> IpPath | None:
                 for scheme in ("https", "http"):
-                    url = f"{scheme}://{path.ip}/"
+                    if scheme == "https":
+                        if await OriginDetector._cert_covers_domain(path.ip, domain):
+                            return path
                     try:
                         async with shared_session.get(
-                            url,
+                            f"{scheme}://{path.ip}/",
                             headers={"Host": domain},
                             ssl=ssl_ctx,
                             allow_redirects=False,
                         ) as resp:
-                            if resp.status >= 400:
+                            for h in LEAK_HEADERS:
+                                val = resp.headers.get(h, "")
+                                for part in val.split(","):
+                                    candidate = part.strip()
+                                    try:
+                                        ip_address(candidate)
+                                        if not OriginDetector._in_waf_range(candidate, PRIVATE_IP_RANGES):
+                                            leaked_ips.add(candidate)
+                                    except ValueError:
+                                        pass
+                            if resp.status in (500, 502, 503, 504, 530):
                                 return None
                             if resp.status in (301, 302, 307, 308):
                                 location = resp.headers.get("Location", "")
@@ -289,10 +339,10 @@ class OriginDetector:
                             body = (await resp.content.read(65536)).decode(errors="ignore").lower()
                             if any(sig in body for sig in CDN_BODY_SIGNALS):
                                 return None
-                            if baseline_body and body:
-                                common = len(set(body.split()) & set(baseline_body.split()))
-                                similarity = common / max(len(baseline_body.split()), 1)
-                                if similarity < 0.3:
+                            stripped = OriginDetector._strip_html(body)
+                            if baseline_body and stripped:
+                                ratio = difflib.SequenceMatcher(None, baseline_body[:4096], stripped[:4096]).ratio()
+                                if ratio < 0.4:
                                     return None
                             return path
                     except Exception:
@@ -300,15 +350,33 @@ class OriginDetector:
                 return None
 
             semaphore = asyncio.Semaphore(5)
+
             async def _rate_limited_probe(path: IpPath) -> IpPath | None:
                 async with semaphore:
                     return await _probe(path)
 
             results = await asyncio.gather(*[_rate_limited_probe(p) for p in candidates])
 
-        return [r for r in results if r is not None]
+            existing_ips = {r.ip for r in results if r is not None}
+            leaked_paths = [
+                IpPath(
+                    source="LEAKED_HEADER",
+                    via="HTTP header",
+                    ip=lip,
+                    label=f"Leaked via response header: {lip}",
+                )
+                for lip in leaked_ips
+                if lip not in existing_ips
+            ]
+
+        return [r for r in results if r is not None] + leaked_paths
+
     # ── Helpers ───────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _strip_html(text: str) -> str:
+        return re.sub(r"<[^>]+>", " ", text).lower()
+        
     @staticmethod
     def _matches_any(value: str, patterns: list[str]) -> bool:
         return any(re.search(pat, value, re.IGNORECASE) for pat in patterns)

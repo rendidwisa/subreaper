@@ -102,6 +102,41 @@ examples:
         help="Download latest WAF/CDN IP ranges from official sources (CloudFront, Cloudflare, Fastly)",
     )
     parser.add_argument(
+        "-E", "--email-security",
+        action="store_true",
+        default=False,
+        help="Check SPF, DMARC, and DKIM misconfiguration",
+    )
+    parser.add_argument(
+        "-St", "--stale-dns",
+        action="store_true",
+        default=False,
+        help="Detect stale DNS records (zombie A, MX, and TXT verification records)",
+    )
+    parser.add_argument(
+        "-Co", "--cors-chain",
+        action="store_true",
+        default=False,
+        help="Detect CORS misconfiguration chained with dangling/vulnerable subdomains (requires -f)",
+    )
+    parser.add_argument(
+        "-Ds", "--dnssec",
+        action="store_true",
+        default=False,
+        help="Check DNSSEC misconfiguration, NSEC zone walking, and zone transfer (AXFR)",
+    )
+    parser.add_argument(
+        "-Sk", "--sinkhole",
+        action="store_true",
+        default=False,
+        help="Detect DNS sinkhole and attempt service hijack with default credentials",
+    )
+    parser.add_argument(
+        "-A", "--aggressive",
+        action="store_true",
+        help="Probe open ports and attempt default credential login on detected sinkholes",
+    )
+    parser.add_argument(
         "-S", "--setup-geoip",
         action="store_true",
         help="Download MaxMind GeoLite2 databases for enhanced IP intelligence",
@@ -149,6 +184,21 @@ def _print_header(domains: list[str], args: argparse.Namespace) -> None:
         tbl.add_row("Origin Check",  "[green]enabled[/green]")
     if args.ghost:
         tbl.add_row("Ghost Service", "[green]enabled[/green]")
+    if args.dnssec:
+        tbl.add_row("DNSSEC Check", "[green]enabled[/green]")
+    if args.email_security:
+        tbl.add_row("Email Security", "[green]enabled[/green]")
+    if args.stale_dns:
+        tbl.add_row("Stale DNS",     "[green]enabled[/green]")
+    if args.cors_chain:
+        tbl.add_row("CORS Chain",    "[green]enabled[/green]")
+    if args.sinkhole:
+        tbl.add_row("Sinkhole",      "[green]enabled[/green]")
+    if args.aggressive:
+        tbl.add_row("Aggressive",    "[green]enabled[/green]")
+    if args.validate_origins:
+        tbl.add_row("Validate Origins", "[green]enabled[/green]")
+        
     console.print(tbl)
     console.print(Rule(style="dim"))
     console.print()
@@ -219,6 +269,11 @@ async def async_main() -> None:
         check_origin=args.origin,
         check_ghost_services=args.ghost,
         validate_origins=args.validate_origins,
+        check_email_security=args.email_security,
+        check_stale_dns=args.stale_dns,
+        check_cors_chain=args.cors_chain,
+        check_dnssec=args.dnssec,
+        check_sinkhole=args.sinkhole,
     )
 
     start_total = time.time()

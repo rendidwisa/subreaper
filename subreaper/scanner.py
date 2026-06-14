@@ -14,6 +14,11 @@ from subreaper.core.http_prober import HTTPProber
 from subreaper.core.vuln_detector import VulnDetector
 from subreaper.models import ScanResult
 from subreaper.reporter import Reporter
+from subreaper.core.email_security import EmailSecurityChecker
+from subreaper.core.stale_dns_detector import StaleDnsDetector
+from subreaper.core.cors_analyzer import CorsAnalyzer
+from subreaper.core.dnssec_checker import DnssecChecker
+from subreaper.core.sinkhole_hijack import SinkholeHijacker
 
 from rich.console import Console
 from rich.live import Live
@@ -78,17 +83,34 @@ class SubReaper:
         check_origin: bool = False,
         check_ghost_services: bool = False,
         validate_origins: bool = False,
+        check_email_security: bool = False,
+        check_stale_dns: bool = False,
+        check_cors_chain: bool = False,
+        check_dnssec: bool = False,
+        check_sinkhole: bool = False,
+        aggressive: bool = False
     ):
         self.concurrency = concurrency
         self.verbose     = verbose
         self.check_origin        = check_origin
         self.check_ghost_services = check_ghost_services
+        self.check_stale_dns = check_stale_dns
+        self.stale_dns = StaleDnsDetector()
         self.validate_origins     = validate_origins
+        self.check_email_security = check_email_security
+        self.check_cors_chain = check_cors_chain
+        self.cors_analyzer    = CorsAnalyzer()
+        self.check_dnssec = check_dnssec
+        self.dnssec_checker = DnssecChecker()
+        self.check_sinkhole = check_sinkhole
+        self.aggressive = aggressive
+        self.sinkhole_hijacker = SinkholeHijacker(timeout=timeout)
         self.reporter    = reporter or Reporter()
 
         self.dns      = DNSAnalyzer(nameservers=nameservers, timeout=timeout)
         self.http     = HTTPProber(timeout=timeout)
         self.detector = VulnDetector(self.dns, self.http)
+        self.email_checker = EmailSecurityChecker()
 
         self._semaphore: asyncio.Semaphore | None = None
         self.results: list[ScanResult] = []
@@ -144,14 +166,63 @@ class SubReaper:
             result.origin_result  = origin_result
             result.ghost_services = ghost_services
             result.vulnerabilities = vulns
+            if self.check_email_security and domain in self._email_apex_domains:
+                spf_vulns = await asyncio.get_running_loop().run_in_executor(
+                    None, self.email_checker.check_spf, domain, dns_info)
+                dmarc_task = self.email_checker.check_dmarc(domain)
+                dkim_task  = self.email_checker.check_dkim(domain)
+                dmarc_vulns, dkim_vulns = await asyncio.gather(dmarc_task, dkim_task)
+                result.vulnerabilities.extend(spf_vulns)
+                result.vulnerabilities.extend(dmarc_vulns)
+                result.vulnerabilities.extend(dkim_vulns)
 
             elapsed             = (time.time() - start) * 1000
+            
             result.scan_time_ms = round(elapsed, 2)
+            
+            stale_dns_results = []
+            if self.check_stale_dns:
+                stale_dns_results = await self.stale_dns.detect(domain, dns_info)
 
-            if vulns:
+            result.stale_dns_results = stale_dns_results
+            dnssec_results        = []
+            zone_transfer_results = []
+            dangling_delegation_results = []
+
+            if self.check_dnssec and result.dns:
+                cname_pairs = [
+                    (hop["from"], hop["to"])
+                    for hop in (result.dns.cname_chain or [])
+                    if hop.get("from") and hop.get("to")
+                ]
+
+                dnssec_results, zone_transfer_results, dangling_delegation_results = (
+                    await self.dnssec_checker.check_all(domain, cname_pairs)
+                )
+
+            result.dnssec_results            = dnssec_results
+            result.zone_transfer_results     = zone_transfer_results
+            result.dangling_delegation_results = dangling_delegation_results
+
+            sinkhole_results = None
+            sinkhole_hijack_results = None
+            service_sinkhole_results = None
+            if self.check_sinkhole and result.dns:
+                sinkhole_data = await asyncio.get_running_loop().run_in_executor(
+                    None, self.sinkhole_hijacker.analyze, domain, result.dns, self.aggressive
+                )
+                sinkhole_results = sinkhole_data.get("sinkhole")
+                sinkhole_hijack_results = sinkhole_data.get("hijack")
+                result.service_sinkhole_results = sinkhole_data.get("service_sinkhole")
+            result.sinkhole_results = sinkhole_results
+            result.sinkhole_hijack_results = sinkhole_hijack_results
+            result.service_sinkhole_results = service_sinkhole_results 
+            
+
+            if result.vulnerabilities:
                 result.status = "VULNERABLE"
-                svc    = vulns[0].service if vulns else ""
-                detail = f"{len(vulns)} issue · {svc}" if svc else f"{len(vulns)} issue"
+                svc    = result.vulnerabilities[0].service if result.vulnerabilities else ""
+                detail = f"{len(result.vulnerabilities)} issue · {svc}" if svc else f"{len(result.vulnerabilities)} issue"
                 self._rows[idx] = {"domain": domain, "status": "VULNERABLE", "detail": detail, "ms": f"{elapsed:.0f}"}
 
             elif dns_info.nxdomain:
@@ -168,7 +239,7 @@ class SubReaper:
             self._refresh()
 
             if not self._live:
-                if vulns:
+                if result.vulnerabilities:
                     self.reporter.print_vuln(result)
                 elif self.verbose or result.status in ("NXDOMAIN", "VULNERABLE"):
                     if result.status == "CLEAN":
@@ -176,9 +247,17 @@ class SubReaper:
                     else:
                         self.reporter.print_status(domain, result.status)
                 if origin_result and origin_result[0]:
-                    self.reporter.print_origin_origin_result(domain, origin_result)
+                    self.reporter.print_origin_result(domain, origin_result)
                 if ghost_services:
                     self.reporter.print_ghost_services(domain, ghost_services)
+                if stale_dns_results:
+                    self.reporter.print_stale_dns(domain, stale_dns_results)
+                if result.dnssec_results:
+                    self.reporter.print_dnssec(domain, result.dnssec_results)
+                if result.zone_transfer_results:
+                    self.reporter.print_zone_transfer(domain, result.zone_transfer_results)
+                if result.dangling_delegation_results:
+                    self.reporter.print_dangling_delegation(domain, result.dangling_delegation_results)
                     
             self.results.append(result)
             return result
@@ -187,7 +266,11 @@ class SubReaper:
         clean        = [d for d in domains if d.strip()]
         self._total  = len(clean)
         self._rows   = [{"domain": d.strip().lower(), "status": "SCANNING", "detail": "", "ms": ""} for d in clean]
-
+        clean_set = set(clean)
+        self._email_apex_domains = {
+            d for d in clean 
+            if not any(d != other and d.endswith("." + other) for other in clean_set)
+        }
         if console.is_terminal:
             with Live(
                 _build_table(self._rows, self._total),
@@ -202,6 +285,17 @@ class SubReaper:
                 )
                 self._live = None
             self.results = [r for r in raw if r and not isinstance(r, Exception)]
+
+            if self.check_cors_chain and len(self.results) > 1:
+                cors_findings = await self.cors_analyzer.analyze(self.results)
+                domain_map = {r.domain: r for r in self.results}
+                for finding in cors_findings:
+                    r = domain_map.get(finding.affected_domain)
+                    if r:
+                        r.cors_chain_results.append(finding)
+                if cors_findings:
+                    self.reporter.print_cors_chain(cors_findings)
+
         else:
             raw = await asyncio.gather(
                 *[self.scan_domain(d) for d in clean],

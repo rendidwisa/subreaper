@@ -236,7 +236,29 @@ class DNSAnalyzer:
         info.txt_records  = [r for r in self.resolve(domain, "TXT")  if "__" not in r]
 
         return info
+    async def query_specific_txt(self, fqdn: str) -> list[str]:
+        loop = asyncio.get_running_loop()
+        try:
+            records = await asyncio.wait_for(
+                loop.run_in_executor(self._executor, self._resolve_txt_blocking, fqdn),
+                timeout=8,
+            )
+            return records
+        except (asyncio.TimeoutError, Exception):
+            return []
 
+    def _resolve_txt_blocking(self, fqdn: str) -> list[str]:
+        try:
+            answers = dns.resolver.resolve(fqdn, "TXT", lifetime=5)
+            results = []
+            for rdata in answers:
+                txt = b" ".join(rdata.strings).decode("utf-8", errors="ignore").strip()
+                results.append(txt)
+            return results
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer,
+                dns.resolver.NoNameservers, dns.exception.Timeout):
+            return []
+            
     # ── Utility ───────────────────────────────────────────────────────────────
 
     @staticmethod

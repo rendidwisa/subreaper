@@ -348,6 +348,73 @@ class Reporter:
             console.print(Rule(style="purple dim"))
             console.print()
 
+    # ── email security checks ────────────────────────────────────────────────
+    @staticmethod
+    def _print_email_security(results: list[ScanResult]) -> None:
+        email_findings = []
+        for r in results:
+            for v in r.vulnerabilities:
+                if v.vuln_type == "EMAIL_MISCONFIG":
+                    email_findings.append((r.domain, v))
+        if not email_findings:
+            return
+        console.print(Rule("EMAIL SECURITY", style="bold yellow"))
+        grouped: dict = {}
+        for domain, vuln in email_findings:
+            grouped.setdefault(domain, []).append(vuln)
+
+        for domain, vulns in grouped.items():
+            summary_parts = []
+            fixes = []
+            for v in vulns:
+                sev_color = {
+                    "CRITICAL": "red", "HIGH": "yellow",
+                    "MEDIUM": "cyan", "LOW": "green", "INFO": "dim",
+                }.get(v.severity, "white")
+                summary_parts.append(f"[{sev_color}]{v.description} ({v.severity})[/{sev_color}]")
+                fixes.append(v.fix)
+            console.print(f"  [bold]◆[/bold] {domain}")
+            for part in summary_parts:
+                console.print(f"     {part}")
+            for fix in fixes:
+                console.print(f"     [dim]Fix: {fix}[/dim]")
+
+    # ── stale DNS ──────────────────────────────────────────────────────────
+
+    @staticmethod
+    def print_stale_dns(domain: str, results: list) -> None:
+        if not results:
+            return
+        for r in results:
+            console.print()
+            console.print(Rule(
+                title="[on yellow4][white] ⚠ STALE DNS RECORD [/white][/on yellow4]",
+                style="yellow4 dim",
+            ))
+            t = Table(box=None, show_header=False, padding=(0, 1), min_width=60)
+            t.add_column(style="dim",   no_wrap=True, min_width=14)
+            t.add_column(style="white", overflow="fold")
+
+            sev_style = "red bold" if r.severity == "HIGH" else "yellow bold" if r.severity == "MEDIUM" else "dim"
+            t.add_row("Domain",    Text(r.domain,      style="cyan"))
+            t.add_row("Scenario",  Text(r.scenario,    style="magenta"))
+            t.add_row("Record",    Text(f"{r.record_type}: {r.record_value}", style="white"))
+            t.add_row("Severity",  Text(r.severity,    style=sev_style))
+            t.add_row("Reason",    r.reason)
+            if r.vendor_name:
+                t.add_row("Vendor",    Text(r.vendor_name, style="cyan"))
+            if r.ip_owner_info:
+                t.add_row("IP Owner",  Text(r.ip_owner_info, style="cyan"))
+            if r.ip_reverse_dns:
+                t.add_row("PTR",       Text(r.ip_reverse_dns, style="dim"))
+            if r.mx_priority is not None:
+                t.add_row("MX Priority", Text(str(r.mx_priority), style="dim"))
+            t.add_row("Fix",       Text(r.recommendation, style="green"))
+
+            console.print(t)
+            console.print(Rule(style="yellow4 dim"))
+            console.print()
+
     # ── scan summary ──────────────────────────────────────────────────────────
 
     @staticmethod
@@ -378,6 +445,53 @@ class Reporter:
             stats.add_row("Ghost Services", Text(str(ghost_count), style="purple bold"))
         if waf_count:
             stats.add_row("WAF Exposed",    Text(str(waf_count),   style="orange1 bold"))
+        stale_count = sum(
+            len(getattr(r, "stale_dns_results", []) or []) for r in results
+        )
+        if stale_count:
+            stats.add_row("Stale DNS", Text(str(stale_count), style="yellow bold"))
+        cors_count = sum(
+            len(getattr(r, "cors_chain_results", []) or []) for r in results
+        )
+        if cors_count:
+            stats.add_row("CORS Chain", Text(str(cors_count), style="red bold"))
+
+        dnssec_count = sum(
+            1 for r in results
+            if any(
+                x.severity in ("HIGH", "MEDIUM") or x.nsec_walkable
+                for x in getattr(r, "dnssec_results", [])
+            )
+        )
+        if dnssec_count:
+            stats.add_row("DNSSEC Issues", Text(str(dnssec_count), style="blue bold"))
+
+        zone_count = sum(
+            len([x for x in getattr(r, "zone_transfer_results", []) if x.success])
+            for r in results
+        )
+        if zone_count:
+            stats.add_row("Zone Transfer", Text(str(zone_count), style="red bold"))
+
+        delegation_count = sum(
+            len([x for x in getattr(r, "dangling_delegation_results", []) if x.is_vulnerable])
+            for r in results
+        )
+        if delegation_count:
+            stats.add_row("Dangling Delegation", Text(str(delegation_count), style="red bold"))
+        sinkhole_count = sum(
+            1 for r in results
+            if getattr(r, "sinkhole_results", None) and r.sinkhole_results.sinkhole_detected
+        )
+        if sinkhole_count:
+            stats.add_row("Sinkhole", Text(str(sinkhole_count), style="red bold"))
+
+        hijack_count = sum(
+            1 for r in results
+            if getattr(r, "sinkhole_hijack_results", None) and r.sinkhole_hijack_results.hijackable
+        )
+        if hijack_count:
+            stats.add_row("Sinkhole Hijackable", Text(str(hijack_count), style="red bold"))
         # -------------------------------------------------
         internal_count = sum(
             1 for r in results
@@ -489,6 +603,50 @@ class Reporter:
                     if total_unique > 6:
                         ip_line.append(f"  ... +{total_unique - 6} more", style="dim cyan")
                     console.print(ip_line)
+                    
+        stale_results = [
+            (r, getattr(r, "stale_dns_results", []) or [])
+            for r in results
+            if getattr(r, "stale_dns_results", None)
+        ]
+        if stale_results:
+            console.print()
+            console.print("  [yellow bold]STALE DNS RECORDS:[/yellow bold]")
+            for r, findings in stale_results:
+                for f in findings:
+                    sev_style = "red bold" if f.severity == "HIGH" else "yellow bold"
+                    line = Text("    ◆ ", style="yellow")
+                    line.append(r.domain,    style="white")
+                    line.append(" → ",       style="dim")
+                    line.append(f.scenario,  style="magenta")
+                    line.append(f"  {f.severity}", style=sev_style)
+                    console.print(line)
+                    rec_line = Text("       ", style="dim")
+                    rec_line.append(f.record_type + ": ", style="dim")
+                    rec_line.append(f.record_value[:60], style="cyan")
+                    console.print(rec_line)
+
+        cors_results = [
+            r for r in results
+            if getattr(r, "cors_chain_results", None)
+        ]
+        if cors_results:
+            console.print()
+            console.print("  [red bold]CORS CHAIN MISCONFIGURATION:[/red bold]")
+            for r in cors_results:
+                for f in r.cors_chain_results:
+                    sev_style = "red bold" if f.severity == "CRITICAL" else "orange1 bold"
+                    line = Text("    ◆ ", style="red")
+                    line.append(f.affected_domain,  style="white")
+                    line.append(" → ",              style="dim")
+                    line.append(f.dangerous_origin, style="red")
+                    line.append(f"  {f.severity}",  style=sev_style)
+                    if f.credentials:
+                        line.append("  [CREDENTIALS]", style="red bold")
+                    console.print(line)
+                    cors_line = Text("       CORS: ", style="dim")
+                    cors_line.append(f.cors_value, style="yellow")
+                    console.print(cors_line)
 
         internal_results = [
             r for r in results
@@ -513,6 +671,47 @@ class Reporter:
                 ip_line = Text("       IPs: ", style="dim")
                 ip_line.append(", ".join(p.ip for p in ips), style="cyan")
                 console.print(ip_line)
+     
+        sinkhole_r = [(r, r.sinkhole_results) for r in results if getattr(r, "sinkhole_results", None) and r.sinkhole_results.sinkhole_detected]
+        if sinkhole_r:
+            console.print()
+            console.print("  [red bold]DNS SINKHOLE DETECTED:[/red bold]")
+            for r, sr in sinkhole_r:
+                line = Text("    ◆ ", style="red")
+                line.append(r.domain, style="white")
+                line.append(" → ", style="dim")
+                line.append(sr.sinkhole_ip or "unknown", style="red bold")
+                console.print(line)
+
+        hijack_r = [(r, r.sinkhole_hijack_results) for r in results if getattr(r, "sinkhole_hijack_results", None) and r.sinkhole_hijack_results.hijackable]
+        if hijack_r:
+            console.print()
+            console.print("  [red bold]SINKHOLE HIJACKABLE:[/red bold]")
+            for r, hr in hijack_r:
+                line = Text("    ◆ ", style="red bold")
+                line.append(hr.sinkhole_ip, style="white")
+                line.append(" → ", style="dim")
+                line.append(f"{len(hr.hijacked_services)} service(s) hijacked", style="red")
+                console.print(line)
+
+        service_sinkhole_r = [
+            (r, r.service_sinkhole_results) for r in results
+            if getattr(r, "service_sinkhole_results", None) and r.service_sinkhole_results.detected
+        ]
+        if service_sinkhole_r:
+            console.print()
+            console.print("  [red bold]SERVICE SINKHOLE (Unclaimed Error Page):[/red bold]")
+            for r, sr in service_sinkhole_r:
+                line = Text("    ◆ ", style="red")
+                line.append(r.domain, style="white")
+                line.append(" → ", style="dim")
+                line.append(sr.provider or "Unknown", style="magenta")
+                if sr.claimable:
+                    line.append(" [CLAIMABLE]", style="green bold")
+                line.append(f"  {sr.confidence or '?'}", style="red bold")
+                console.print(line)
+
+        Reporter._print_email_security(results)
 
         # clean 
         if verbose:
@@ -543,6 +742,137 @@ class Reporter:
         console.print(f"  [dim]Elapsed time: {elapsed:.2f}s[/dim]")
         console.print()
 
+    @staticmethod
+    def print_cors_chain(findings: list) -> None:
+        if not findings:
+            return
+        for f in findings:
+            console.print()
+            sev_style = "red bold" if f.severity == "CRITICAL" else "orange1 bold"
+            console.print(Rule(
+                title=f"[on red][white] CORS CHAIN MISCONFIGURATION [/white][/on red]",
+                style="red dim",
+            ))
+            t = Table(box=None, show_header=False, padding=(0, 1), min_width=60)
+            t.add_column(style="dim",   no_wrap=True, min_width=18)
+            t.add_column(style="white", overflow="fold")
+
+            t.add_row("Affected Domain",   Text(f.affected_domain,  style="cyan"))
+            t.add_row("Dangerous Origin",  Text(f.dangerous_origin, style="red"))
+            t.add_row("CORS Value",        Text(f.cors_value,       style="yellow"))
+            t.add_row("Credentials",       Text("YES — session/cookie theft possible" if f.credentials else "NO", 
+                                                style="red bold" if f.credentials else "green"))
+            t.add_row("Severity",          Text(f.severity, style=sev_style))
+            t.add_row("Type",              Text(f.vuln_type, style="magenta"))
+            t.add_row("Fix",               Text(f.recommendation, style="green"))
+
+            console.print(t)
+            console.print(Rule(style="red dim"))
+            console.print()
+
+    @staticmethod
+    def print_dnssec(domain: str, results: list) -> None:
+        for r in results:
+            if r.severity == "INFO" and not r.nsec_walkable:
+                continue
+            console.print()
+            console.print(Rule(
+                title="[on blue][white] ⚠ DNSSEC MISCONFIGURATION [/white][/on blue]",
+                style="blue dim",
+            ))
+            t = Table(box=None, show_header=False, padding=(0, 1), min_width=60)
+            t.add_column(style="dim",   no_wrap=True, min_width=18)
+            t.add_column(style="white", overflow="fold")
+
+            sev_style = "red bold" if r.severity == "HIGH" else "yellow bold"
+            t.add_row("Domain",    Text(r.domain, style="cyan"))
+            t.add_row("Has DNSSEC", Text("YES" if r.has_dnssec else "NO", style="green" if r.has_dnssec else "yellow"))
+            if r.algorithm_name:
+                t.add_row("Algorithm", Text(
+                    f"{r.algorithm_name} (#{r.algorithm_number}) — {r.algorithm_status}",
+                    style="red bold" if r.algorithm_status == "WEAK" else "white",
+                ))
+            if r.cve_reference:
+                t.add_row("CVE", Text(r.cve_reference, style="red"))
+            if r.nsec_walkable:
+                t.add_row("NSEC Walking", Text(f"YES — {len(r.enumerated_names)} names enumerated", style="red bold"))
+                if r.enumerated_names:
+                    names_text = Text()
+                    for name in r.enumerated_names[:20]:
+                        names_text.append(f"  {name}\n", style="yellow")
+                    if len(r.enumerated_names) > 20:
+                        names_text.append(f"  ... +{len(r.enumerated_names) - 20} more\n", style="dim")
+                    t.add_row("Enumerated", names_text)
+            if r.rrsig_missing:
+                t.add_row("RRSIG", Text("MISSING", style="red bold"))
+            t.add_row("Severity", Text(r.severity, style=sev_style))
+            t.add_row("Fix",      Text(r.recommendation, style="green"))
+
+            console.print(t)
+            console.print(Rule(style="blue dim"))
+            console.print()
+
+    @staticmethod
+    def print_zone_transfer(domain: str, results: list) -> None:
+        for r in results:
+            if not r.success:
+                continue
+            console.print()
+            console.print(Rule(
+                title="[on red][white] ⚠ ZONE TRANSFER EXPOSED (AXFR) [/white][/on red]",
+                style="red dim",
+            ))
+            t = Table(box=None, show_header=False, padding=(0, 1), min_width=60)
+            t.add_column(style="dim",   no_wrap=True, min_width=18)
+            t.add_column(style="white", overflow="fold")
+
+            t.add_row("Domain",      Text(r.domain,      style="cyan"))
+            t.add_row("Nameserver",  Text(r.nameserver,  style="yellow"))
+            t.add_row("Records",     Text(str(r.record_count), style="red bold"))
+            t.add_row("Severity",    Text(r.severity,    style="red bold"))
+
+            if r.records:
+                rec_text = Text()
+                for rec in r.records[:30]:
+                    rec_text.append(f"  {rec['name']:<30} {rec['type']:<8} {rec['value']}\n", style="dim")
+                if len(r.records) > 30:
+                    rec_text.append(f"  ... +{len(r.records) - 30} more records\n", style="dim cyan")
+                t.add_row("Dump", rec_text)
+
+            t.add_row("Fix", Text(r.recommendation, style="green"))
+
+            console.print(t)
+            console.print(Rule(style="red dim"))
+            console.print()
+
+    @staticmethod
+    def print_dangling_delegation(domain: str, results: list) -> None:
+        for r in results:
+            if not r.is_vulnerable:
+                continue
+            console.print()
+            console.print(Rule(
+                title="[on red][white] ⚠ DANGLING CNAME DELEGATION [/white][/on red]",
+                style="red dim",
+            ))
+            t = Table(box=None, show_header=False, padding=(0, 1), min_width=60)
+            t.add_column(style="dim",   no_wrap=True, min_width=20)
+            t.add_column(style="white", overflow="fold")
+
+            t.add_row("Subdomain",        Text(r.subdomain,        style="cyan"))
+            t.add_row("Delegated Domain", Text(r.delegated_domain, style="red bold"))
+            t.add_row("Domain Status",    Text(r.delegated_domain_status.upper(),
+                style="red bold" if r.is_vulnerable else "green"))
+            t.add_row("Severity",         Text(r.severity, style="red bold"))
+            if r.whois_raw:
+                preview = r.whois_raw[:200].replace("\n", " ")
+                t.add_row("WHOIS Preview", Text(preview, style="dim"))
+            t.add_row("Fix", Text(r.recommendation, style="green"))
+
+            console.print(t)
+            console.print(Rule(style="red dim"))
+            console.print()
+
     # ── verbose per-domain DNS info ───────────────────────────────────────────
 
     @staticmethod
@@ -561,6 +891,99 @@ class Reporter:
             parts.append("NXDOMAIN")
         if parts:
             console.print(f"    [dim]└─ {' · '.join(parts)}[/dim]")
+
+    @staticmethod
+    def print_sinkhole(domain: str, result) -> None:
+        if not result or not result.sinkhole_detected:
+            return
+        console.print()
+        console.print(Rule(
+            title="[on red][white] ⚠ DNS SINKHOLE DETECTED [/white][/on red]",
+            style="red dim",
+        ))
+        t = Table(box=None, show_header=False, padding=(0, 1), min_width=60)
+        t.add_column(style="dim",   no_wrap=True, min_width=18)
+        t.add_column(style="white", overflow="fold")
+        t.add_row("Domain",          Text(domain, style="cyan"))
+        t.add_row("Resolver",        Text(result.resolver_used, style="yellow"))
+        t.add_row("Sinkhole IP",     Text(result.sinkhole_ip or "", style="red bold"))
+        t.add_row("Severity",        Text(result.severity, style="red bold"))
+        if result.internal_ips_exposed:
+            ips_text = Text()
+            for ip in result.internal_ips_exposed:
+                ips_text.append(f"  {ip}\n", style="cyan")
+            t.add_row("Internal IPs", ips_text)
+        if result.evidence:
+            ev_text = Text()
+            for ev in result.evidence:
+                ev_text.append(f"  • {ev}\n", style="dim")
+            t.add_row("Evidence", ev_text)
+        console.print(t)
+        console.print(Rule(style="red dim"))
+        console.print()
+
+    @staticmethod
+    def print_sinkhole_hijack(domain: str, result) -> None:
+        if not result:
+            return
+        if not result.hijacked_services and not result.available_services:
+            return
+        console.print()
+        sev_style = "red bold" if result.hijackable else "yellow bold"
+        sev_label = "HIJACKABLE" if result.hijackable else "INTERNAL SERVICES EXPOSED"
+        console.print(Rule(
+            title=f"[on red][white] ⚠ SINKHOLE {sev_label} [/white][/on red]",
+            style="red dim",
+        ))
+        t = Table(box=None, show_header=False, padding=(0, 1), min_width=60)
+        t.add_column(style="dim",   no_wrap=True, min_width=18)
+        t.add_column(style="white", overflow="fold")
+        t.add_row("Sinkhole IP", Text(result.sinkhole_ip, style="red bold"))
+        if result.hijacked_services:
+            hijack_text = Text()
+            for svc in result.hijacked_services:
+                hijack_text.append(f"  Port {svc.port}: {svc.default_creds} @ {svc.login_endpoint}\n", style="green bold")
+            t.add_row("Hijacked", hijack_text)
+        else:
+            t.add_row("Hijackable", Text("NO — no default credentials work", style="yellow"))
+        if result.available_services:
+            svc_text = Text()
+            for svc in result.available_services:
+                svc_text.append(f"  Port {svc.port}: {svc.service} ({svc.banner})\n", style="dim")
+            t.add_row("Services", svc_text)
+        t.add_row("Severity", Text(result.severity, style=sev_style))
+        t.add_row("Fix", Text(result.recommendation, style="green"))
+        console.print(t)
+        console.print(Rule(style="red dim"))
+        console.print()
+
+    @staticmethod
+    def print_service_sinkhole(domain: str, result) -> None:
+        if not result or not result.detected:
+            return
+        console.print()
+        console.print(Rule(
+            title="[on red][white] ⚠ SERVICE SINKHOLE DETECTED [/white][/on red]",
+            style="red dim",
+        ))
+        t = Table(box=None, show_header=False, padding=(0, 1), min_width=60)
+        t.add_column(style="dim",   no_wrap=True, min_width=18)
+        t.add_column(style="white", overflow="fold")
+        t.add_row("Domain",     Text(domain, style="cyan"))
+        t.add_row("Provider",   Text(result.provider or "?", style="magenta"))
+        t.add_row("Confidence", Text(result.confidence or "?", style="red bold"))
+        t.add_row("Claimable",  Text(
+            "YES" if result.claimable else "NO",
+            style="green bold" if result.claimable else "yellow"
+        ))
+        t.add_row("HTTP Status", Text(str(result.status or ""), style="cyan"))
+        if result.evidence:
+            for ev in result.evidence:
+                ev_text.append(f"  • {ev}\n", style="dim")
+            t.add_row("Evidence", ev_text)
+        console.print(t)
+        console.print(Rule(style="red dim"))
+        console.print()
 
     # ── JSON export ───────────────────────────────────────────────────────────
 
@@ -620,6 +1043,33 @@ class Reporter:
                     }
                     for gs in getattr(r, "ghost_services", [])
                 ], 
+                "sinkhole": {
+                    "detected":        r.sinkhole_results.sinkhole_detected if r.sinkhole_results else False,
+                    "sinkhole_ip":     r.sinkhole_results.sinkhole_ip if r.sinkhole_results else None,
+                    "internal_ips":    r.sinkhole_results.internal_ips_exposed if r.sinkhole_results else [],
+                    "evidence":        r.sinkhole_results.evidence if r.sinkhole_results else [],
+                } if getattr(r, "sinkhole_results", None) else None,
+
+                "sinkhole_hijack": {
+                    "hijackable":       r.sinkhole_hijack_results.hijackable if r.sinkhole_hijack_results else False,
+                    "hijacked_services": [
+                        {"port": svc.port, "creds": svc.default_creds, "endpoint": svc.login_endpoint}
+                        for svc in (r.sinkhole_hijack_results.hijacked_services if r.sinkhole_hijack_results else [])
+                    ],
+                    "available_services": [
+                        {"port": svc.port, "service": svc.service, "banner": svc.banner}
+                        for svc in (r.sinkhole_hijack_results.available_services if r.sinkhole_hijack_results else [])
+                    ],
+                    "evidence":         r.sinkhole_hijack_results.evidence if r.sinkhole_hijack_results else [],
+                } if getattr(r, "sinkhole_hijack_results", None) else None,
+                "service_sinkhole": {
+                    "detected":    r.service_sinkhole_results.detected,
+                    "provider":    r.service_sinkhole_results.provider,
+                    "claimable":   r.service_sinkhole_results.claimable,
+                    "confidence":  r.service_sinkhole_results.confidence,
+                    "http_status": r.service_sinkhole_results.status,
+                    "evidence":    r.service_sinkhole_results.evidence,
+                } if getattr(r, "service_sinkhole_results", None) else None,
             })
 
         with open(path, "w") as fh:
