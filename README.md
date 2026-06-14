@@ -14,6 +14,11 @@ Built for bug bounty hunters and pentesters with a **precision-focused detection
 - **Concurrent Scanning** – Blazing-fast async scanning with configurable concurrency
 - **Professional Reporting** – Colored terminal output, verbose DNS details, and JSON export
 - **Precision-Focused Detection** – Multi-resolver consensus, wildcard guard, and negative signal filtering to minimize false positives
+- **Email Security Checks** – Detect SPF, DMARC, and DKIM misconfigurations
+- **Stale DNS Detection** – Identify zombie A, MX, and dangling TXT verification records
+- **CORS Misconfiguration Detection** – Chain CORS weaknesses with vulnerable/dangling subdomains
+- **DNSSEC Analysis** – Check DNSSEC misconfiguration, NSEC zone walking, and attempt AXFR zone transfers
+- **Sinkhole & Hijack Detection** – Detect DNS sinkholes and probe for default credential hijacking
 
 ---
 
@@ -95,6 +100,60 @@ To reduce false positives, add -Vo to perform direct HTTP requests to each candi
 subreaper -f subs.txt -i -Vo
 ```
 
+### Email Security Checks (-E)
+
+Detect common email security misconfigurations:
+-Missing or overly permissive SPF records (+all)
+-Missing DMARC policies (p=none or absent)
+-Invalid or absent DKIM selectors
+
+```bash
+subreaper -d domain.com -E
+```
+
+### Stale DNS Detection (-St)
+
+Find dangling DNS records that point to expired resources:
+-Zombie A records pointing to unresolvable IPs or dead services
+-MX records pointing to defunct mail servers
+-TXT verification records (Google, Microsoft, etc.) left after service deletion
+
+```bash
+subreaper -f subs.txt -St
+```
+
+### CORS Misconfiguration Chaining (-Co)
+
+Detect CORS misconfigurations that can be chained with vulnerable or dangling subdomains to exfiltrate data. Requires a file input (-f).
+
+```bash
+subreaper -f subs.txt -Co
+```
+
+### DNSSEC & Zone Transfer (-Ds)
+
+Check for DNSSEC misconfigurations that weaken domain integrity, attempt NSEC zone walking to enumerate all zone records, and probe for open AXFR zone transfers.
+
+```bash
+subreaper -d domain.com -Ds
+```
+
+### Sinkhole Detection (-Sk)
+
+Identify DNS sinkholes where the domain resolves but points to a default or placeholder service (parking pages, ad traps, etc.). Optionally attempts service hijack using known default credentials.
+
+```bash
+subreaper -f sinkhole_targets.txt -Sk
+```
+
+### Aggressive Mode (-A)
+
+When used with sinkhole detection (-Sk), this probes open ports on the resolved IP and attempts default credential login on common services (SSH, FTP, HTTP basic auth).
+
+```bash
+subreaper -f sinkhole_targets.txt -Sk -A
+```
+
 ### Pipe from another tool (e.g., subfinder)
 
 ```bash
@@ -155,6 +214,12 @@ You can also run it before a scan session to ensure the most accurate results.
 | `--origin`         | `-i`  | Detect WAF bypass via exposed original IPs                      |
 | `--validate-origin`| `-Vo` | Validate potential origin IPs with direct HTTP probes           |
 | `--update-waf-db`  | `-U`  | Download latest WAF/CDN IP ranges from official sources         |
+| `--email-security` | `-E`  | Check SPF, DMARC, and DKIM misconfigurations                    |
+| `--stale-dns`      | `-St` | Detect stale DNS records (zombie A, MX, TXT verification)       |
+| `--cors-chain`     | `-Co` | CORS misconfig chained with dangling/vulnerable subdomains (needs -f) |
+| `--dnssec`         | `-Ds` | Check DNSSEC misconfig, NSEC walking, and attempt AXFR          |
+| `--sinkhole`       | `-Sk` | Detect DNS sinkholes & attempt service hijack with default creds|
+| `--aggressive`     | `-A`  | Probes ports & tries default logins on sinkholes (requires -Sk) |
 
 ---
 
