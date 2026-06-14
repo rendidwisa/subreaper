@@ -32,7 +32,7 @@ console = Console()
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="subreaper",
-        description="SubReaper v1.1.2 — Subdomain Takeover & Vulnerability Scanner",
+        description="SubReaper v1.2.0 — Subdomain Takeover & Vulnerability Scanner",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 examples:
