@@ -293,9 +293,6 @@ class SubReaper:
                     r = domain_map.get(finding.affected_domain)
                     if r:
                         r.cors_chain_results.append(finding)
-                if cors_findings:
-                    self.reporter.print_cors_chain(cors_findings)
-
         else:
             raw = await asyncio.gather(
                 *[self.scan_domain(d) for d in clean],
